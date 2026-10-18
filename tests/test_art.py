@@ -123,3 +123,22 @@ def test_head_and_face_shapes_stay_above_the_default_body_box():
         for shape in groups[ident]:
             if hasattr(shape, "ry"):
                 assert shape.cy + shape.ry + module.OUTLINE / 2 <= top
+
+
+def _load_generator():
+    spec = importlib.util.spec_from_file_location("generate_art", GENERATOR)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_hero_text_fits_left_column_with_a_clear_gap_to_the_mascot():
+    boxes = _load_generator().hero_layout()
+    column_left, _, column_right, _ = boxes["column"]
+    mascot = boxes["mascot"]
+    for key in ("title", "tagline", "subline"):
+        x0, _, x1, _ = boxes[key]
+        assert column_left <= x0 and x1 <= column_right, f"{key} leaves the left column"
+        assert mascot[0] - x1 >= 40, f"{key} is closer than 40 px to the mascot"
+    assert column_right <= mascot[0]

@@ -3,6 +3,20 @@
 All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Hero banner re-laid out: the title and tagline fit the left column with a clear gap to the
+  mascot, checked by a layout test.
+- `scripts/e2e-smoke.sh` picks `$PYTHON`, else `.venv/bin/python`, else `python3`, requires the
+  build module, and works in a fresh `run.*` directory without deleting existing evidence.
+- `scripts/scan-secrets.sh` reports only status, counts and `type at file:line`, never raw hook
+  output; `SCAN_ROOT` selects the scanned repository.
+- README states the network scope precisely and qualifies hash reproducibility to the same Pillow
+  toolchain; `docs/architecture.md` describes the actual dependency graph.
+- `detect-secrets` is pinned to 1.5.0 in the dev extra and in CI.
+
 ## [0.1.0] - 2026-10-18
 
 ### Added

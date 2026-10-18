@@ -350,8 +350,33 @@ def snowflake(draw: ImageDraw.ImageDraw, cx: float, cy: float) -> None:
         draw.line((cx - dx, cy - dy, cx + dx, cy + dy), fill="#7FA6D8", width=5)
 
 
+HERO_SCALE = 2  # the hero is drawn at 2x, then downsampled for smooth edges
+HERO_COLUMN = (88, 620)  # x range of the left text column in output pixels
+HERO_MASCOT = (690, 66, 380)  # x, y and size of the main mascot in output pixels
+HERO_TEXT = (
+    # key, x, y, text, font size in output pixels
+    ("title", 88, 190, "mascot-wardrobe", 64),
+    ("tagline", 92, 282, "Generate once. Select by weather.", 34),
+    ("subline", 92, 340, "Offline, deterministic outfits for your mascot.", 22),
+)
+
+
+def hero_layout() -> dict[str, tuple[int, int, int, int]]:
+    """Output-pixel bounding boxes (x0, y0, x1, y1) of the hero pieces, measured with the real font."""
+    boxes: dict[str, tuple[int, int, int, int]] = {}
+    for key, x, y, text, size in HERO_TEXT:
+        left, top, right, bottom = font(size).getbbox(text, anchor="lt")
+        boxes[key] = (x + left, y + top, x + right, y + bottom)
+    mx, my, msize = HERO_MASCOT
+    alpha = render_mascot(msize).getchannel("A").point(lambda v: 255 if v > 0 else 0)
+    left, top, right, bottom = alpha.getbbox()
+    boxes["mascot"] = (mx + left, my + top, mx + right, my + bottom)
+    boxes["column"] = (HERO_COLUMN[0], 0, HERO_COLUMN[1], 500)
+    return boxes
+
+
 def build_hero(outfits: list[dict]) -> Image.Image:
-    scale = 2  # draw at 2x, then downsample for smooth edges
+    scale = HERO_SCALE
     width, height = 1600 * scale, 500 * scale
     hero = gradient((width, height), "#DDF3E8", "#FFF4DC")
     # Soft background discs give depth without clutter.
@@ -362,24 +387,18 @@ def build_hero(outfits: list[dict]) -> Image.Image:
     hero = Image.alpha_composite(hero, discs)
     draw = ImageDraw.Draw(hero)
     draw.rounded_rectangle((88 * scale, 150 * scale, 160 * scale, 158 * scale), radius=4 * scale, fill=CORAL)
-    draw.text((88 * scale, 186 * scale), "mascot-wardrobe", font=font(74 * scale), fill=INK, anchor="lt")
-    draw.text(
-        (92 * scale, 292 * scale),
-        "Generate once. Select by weather.",
-        font=font(38 * scale),
-        fill=MUTED,
-        anchor="lt",
-    )
-    draw.text(
-        (92 * scale, 352 * scale),
-        "Offline, deterministic outfits for your mascot.",
-        font=font(24 * scale),
-        fill=MUTED,
-        anchor="lt",
-    )
+    for key, x, y, text, size in HERO_TEXT:
+        draw.text(
+            (x * scale, y * scale),
+            text,
+            font=font(size * scale),
+            fill=INK if key == "title" else MUTED,
+            anchor="lt",
+        )
     # Main mascot, bare, standing on a soft shadow.
-    main = render_mascot(380 * scale)
-    hero.alpha_composite(main, (664 * scale, 66 * scale))
+    mx, my, msize = HERO_MASCOT
+    main = render_mascot(msize * scale)
+    hero.alpha_composite(main, (mx * scale, my * scale))
     # Outfit strip: cold -> mild -> hot, which reads as the weather changing.
     panel = card((470 * scale, 400 * scale), 40 * scale, fill=(255, 255, 255, 170))
     hero.alpha_composite(panel, (1070 * scale, 50 * scale))

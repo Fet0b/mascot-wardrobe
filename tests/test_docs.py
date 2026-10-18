@@ -213,11 +213,14 @@ def test_scanner_gates_with_hook_and_scripts_are_executable():
         assert (ROOT / name).stat().st_mode & 0o111, name
 
 
-def test_detect_secrets_is_bounded_in_dev_extras_and_build_outputs_are_ignored():
+def test_detect_secrets_is_pinned_in_dev_extras_and_ci_and_build_outputs_are_ignored():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dev = config["project"]["optional-dependencies"]["dev"]
     pin = next(d for d in dev if d.startswith("detect-secrets"))
-    assert "<" in pin
+    assert pin == "detect-secrets==1.5.0"
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "detect-secrets==1.5.0" in ci and "detect-secrets>=" not in ci
+    assert "Python 3.12" in ci and "3.14" in ci and "untested" in ci
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "dist/" in ignored and "build/" in ignored
 
@@ -226,3 +229,26 @@ def test_detect_secrets_is_bounded_in_dev_extras_and_build_outputs_are_ignored()
 def test_rewritten_docs_are_english(name):
     text = (ROOT / f"docs/{name}.md").read_text(encoding="utf-8")
     assert not re.search(r"[ãõçáéíóúâêô]", text)
+
+
+def test_readme_network_and_reproducibility_statements_are_qualified():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "only external request" in readme and "loopback" in readme
+    assert "only network call" not in readme
+    assert "same Pillow" in readme
+
+
+def test_architecture_describes_the_real_dependency_graph():
+    arch = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+    adr = (ROOT / "docs/adr/0001-layering.md").read_text(encoding="utf-8")
+    for text in (arch, adr):
+        assert "inward" not in text.lower()
+    assert "application imports" in arch and "domain imports nothing" in arch
+    assert "supporting" in arch and "`Renderer`" in arch and "one real seam" in arch
+
+
+def test_script_prerequisites_are_documented():
+    for name in ("README.md", "CONTRIBUTING.md", "docs/verification.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "pip install build" in text, name
+        assert ".venv/bin/python" in text, name

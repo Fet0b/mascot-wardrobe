@@ -12,7 +12,8 @@ for a temperature is a lookup in a manifest: no image work, no network, no model
 - Selection reads the manifest and returns the path of an outfit that already exists, so it is
   instant, repeatable and safe to run from a scheduler every few hours.
 - There is no AI or LLM dependency and no recurring inference cost. The same input always gives
-  the same output hashes.
+  the same output hashes when run with the same Pillow and libjpeg toolchain; a different Pillow
+  wheel can encode pixels or JPEG bytes differently.
 
 ![Six generated outfits](assets/contact-sheet.png)
 
@@ -63,7 +64,9 @@ where your mascot's body is. See [docs/wardrobe.md](docs/wardrobe.md).
 Everything above is offline. `scripts/e2e-smoke.sh` runs the whole flow against a freshly built
 wheel in a throwaway virtual environment: it generates twice and compares hashes and mtimes,
 selects one outfit per category plus a Fahrenheit input, and runs `demo` twice to prove the
-second run is `unchanged`. It never passes `--live-weather`.
+second run is `unchanged`. It never passes `--live-weather`. It uses `$PYTHON`, else
+`.venv/bin/python`, else `python3`, and that interpreter needs the build module
+(`pip install build`); the outputs go to a fresh run directory and nothing existing is deleted.
 
 ## Live weather (optional)
 
@@ -117,7 +120,8 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 - Output paths reject `..` and symbolic links; file names and slugs are validated and input
   PNG size is bounded.
 - The optional HTTP sandbox bridge binds to loopback only and is a local contract test.
-- The only network call in the code is the opt-in `--live-weather` request to Open-Meteo.
+- The only external request is the opt-in `--live-weather` call to Open-Meteo. Separately, the
+  sandbox bridge and its client talk to each other over loopback HTTP on your own machine.
 - Nothing is installed as a service; scheduler files are `.example` templates only.
 
 See [SECURITY.md](SECURITY.md) for reporting and scope, and [CONTRIBUTING.md](CONTRIBUTING.md)

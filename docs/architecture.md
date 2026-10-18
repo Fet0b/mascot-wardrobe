@@ -2,7 +2,8 @@
 
 mascot-wardrobe prepares six outfits for a mascot once, then selects one by temperature. It is
 a small library plus a CLI. It installs no services, changes no real accounts and makes no
-network calls except the opt-in Open-Meteo weather request.
+external requests except the opt-in Open-Meteo weather request. The sandbox bridge uses
+loopback only.
 
 ## Domain language
 
@@ -16,22 +17,30 @@ network calls except the opt-in Open-Meteo weather request.
 - **Channel**: a destination for a selected outfit. All channels are export-only (files, or a
   loopback test bridge); none is a real account.
 
-## Layers
+## Structure and dependencies
 
-The layering is pragmatic, not a claim of full enterprise architecture.
+This is one wardrobe domain context. Weather and channels are supporting adapters around it.
+The layering is pragmatic and is not a claim of full enterprise architecture or of dependency
+inversion.
 
-| Layer | Package | Responsibility |
-| --- | --- | --- |
-| Domain | `mascot_wardrobe.domain` | Pure values and rules: `Category`, `CountryProfile`, `Mascot`, `validate_temperature`, `to_celsius`. No I/O, no Pillow, no network. |
-| Application | `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, and the `safe_output` path guard. |
-| Adapters | `mascot_wardrobe.wardrobe` | `WardrobeAgent` (generation, manifest, idempotent reuse, atlas and JPEG assets). |
-| | `mascot_wardrobe.wardrobe.composer` | Pillow compositor: `LocalComposer`, `OutfitBrief`, the `Renderer` protocol, `CATEGORIES`, `_validate_brief`. |
-| | `mascot_wardrobe.channels` | `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
-| | `mascot_wardrobe.infrastructure` | `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
-| Interface | `mascot_wardrobe.interfaces.cli` | `generate`, `select`, `sandbox`, `demo` commands. |
+| Package | Responsibility |
+| --- | --- |
+| `mascot_wardrobe.domain` | Pure values and rules: `Category`, `CountryProfile`, `Mascot`, `validate_temperature`, `to_celsius`. No I/O, no Pillow, no network. |
+| `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, and the `safe_output` path guard. |
+| `mascot_wardrobe.wardrobe` | `WardrobeAgent` (generation, manifest, idempotent reuse, atlas and JPEG assets). |
+| `mascot_wardrobe.wardrobe.composer` | Pillow compositor: `LocalComposer`, `OutfitBrief`, the `Renderer` protocol, `CATEGORIES`, `_validate_brief`. |
+| `mascot_wardrobe.channels` | Supporting adapters: `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
+| `mascot_wardrobe.infrastructure` | Supporting adapters: `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
+| `mascot_wardrobe.interfaces.cli` | `generate`, `select`, `sandbox`, `demo` commands. |
 
-Dependencies point inwards: the CLI calls the application layer, which uses the domain, the
-wardrobe agent, channels and infrastructure. The domain imports nothing from the other layers.
+The actual import graph: the CLI (interfaces) calls the application layer, and imports
+`infrastructure.weather` itself for the live weather option. The application imports the concrete
+`infrastructure.policies`, `wardrobe` and `channels` modules and the domain. `wardrobe` and
+`infrastructure` also import the domain. The domain imports nothing from the other packages.
+There are no interfaces or injection points between the application and its adapters.
+
+The `Renderer` protocol is the one real seam: `WardrobeAgent` accepts any object implementing it,
+so a different compositor can be injected without touching the temperature rules.
 
 ### The composer split
 

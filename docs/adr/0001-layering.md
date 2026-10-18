@@ -10,7 +10,8 @@ dependency from the rules on I/O.
 
 ## Decision
 
-Keep five packages with inward dependencies:
+Keep five packages. The domain imports nothing; the application imports the concrete adapters;
+the CLI calls the application:
 
 - `domain`: pure values and rules (`Category`, `CountryProfile`, `Mascot`, temperature
   validation and conversion).
@@ -29,6 +30,7 @@ the use case import them there. `WardrobeAgent` accepts any object implementing 
 ## Consequences
 
 - Temperature rules can be tested without Pillow, network or files.
-- A different compositor can be injected without touching the rules.
+- A different compositor can be injected through the `Renderer` protocol, the one real seam.
+  Other adapters are concrete and are not behind interfaces.
 - The split is limited to where it pays off. The wardrobe use case and its asset helpers still
   share one module, and this is not a claim of full domain-driven design.
