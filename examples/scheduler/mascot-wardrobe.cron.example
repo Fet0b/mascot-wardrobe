@@ -1,0 +1,4 @@
+# Example only. Never installed by mascot-wardrobe.
+# Every 6 hours, export the outfit for 22 C from an already generated wardrobe.
+# Replace the placeholder paths and the temperature before use.
+0 */6 * * * cd /path/to/workdir && /path/to/venv/bin/mascot-wardrobe demo --manifest mascot-wardrobe-out/catalog/manifest.json --country BR --temperature 22 --channel telegram >> /path/to/workdir/mascot-wardrobe-cron.out 2>&1

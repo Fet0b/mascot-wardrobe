@@ -1,0 +1,9 @@
+# Example only. Never installed by mascot-wardrobe.
+# A systemd user service that exports one existing outfit. Pair it with the timer example.
+[Unit]
+Description=Export the current mascot-wardrobe outfit (example)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/workdir
+ExecStart=/path/to/venv/bin/mascot-wardrobe demo --manifest mascot-wardrobe-out/catalog/manifest.json --country BR --temperature 22 --channel telegram

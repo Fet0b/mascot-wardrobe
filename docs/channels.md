@@ -1,99 +1,93 @@
-# Canais: somente não produção
+# Channels
 
-Este contexto não acessa contas reais, credenciais, bots ou serviços externos.
-A implementação existente foi consultada apenas para compatibilidade de contrato;
-nenhum arquivo ou serviço de produção deve ser alterado.
+Channels are export-only. Nothing in this project changes a real WhatsApp, Telegram, Discord
+or other account, and no credentials are required or read.
 
-## Bridge WhatsApp simulado
+Two kinds of destination exist:
+
+- **File export** (`FileExportChannel`): copies files into a folder. Used for `telegram`,
+  `discord`, `hermes-cli` and, as a library class, for `whatsapp`.
+- **Loopback sandbox bridge** (`SandboxBridge` plus `WhatsAppBridgeChannel`): a local HTTP
+  server on `127.0.0.1` that exercises an update-and-read-back contract against files. It is a
+  local contract test, not a WhatsApp integration.
+
+## CLI routing
+
+`mascot-wardrobe sandbox|demo --channel <name>`:
+
+| Channel | What happens |
+| --- | --- |
+| `whatsapp` (default) | `sync_sandbox` starts the loopback bridge, copies the selected JPEG to `<state-dir>/current.jpg` and reads it back. Reports `updated` then `unchanged`. |
+| `telegram`, `discord`, `hermes-cli` | `export_outfit` copies files with `FileExportChannel`. Reports `exported` then `unchanged`. |
+
+File export for the `whatsapp` channel name is available through `FileExportChannel` (and is
+covered by its unit test); the CLI keeps routing `--channel whatsapp` to the bridge.
+
+## Sandbox export versus real account changes
+
+A sandbox export or a bridge run proves that bytes were copied to a local folder or file. It
+does not prove that anything was published, and a real service may recompress images.
+
+Changing the avatar of a Telegram bot is not available in this project. The project never calls
+any Telegram API and never claims to; that follows from the export-only decision (ADR 0003), not
+from a statement about what any platform offers. The same holds for every other service. A
+real integration would need explicit target authorization, credentials kept outside the
+repository, a provider adapter and a read-back check, and is out of scope.
+
+## File exports
+
+```python
+from pathlib import Path
+from mascot_wardrobe.channels import FileExportChannel
+
+channel = FileExportChannel(Path("exports"), "telegram")
+result = channel.export("sunny-br-warm", Path("a.jpg"), Path("a-atlas.png"), Path("manifest.json"))
+```
+
+- `FileExportChannel(sandbox_dir, channel)` where `channel` is `whatsapp`, `telegram`,
+  `discord` or `hermes-cli`; anything else is a `ValueError`.
+- `.export(slug, portrait, atlas, manifest)` copies bytes unchanged to
+  `<sandbox_dir>/<channel>/<slug>/<original-name>`. The three file names must be distinct.
+- Inputs and destinations are validated before writing; symbolic links and files outside the
+  declared root are refused. Each file is written atomically, but the set is not transactional.
+- The result has `slug`, `channel`, `sandbox: true`, `action` (`exported` or `unchanged`),
+  `remote_sync: false`, `verified: false` and `files` (portrait, atlas, manifest). A second run
+  with identical bytes reports `unchanged` and does not rewrite files, so mtimes and hashes are
+  stable.
+
+## Loopback sandbox bridge
 
 ```python
 from pathlib import Path
 from mascot_wardrobe.channels import SandboxBridge, WhatsAppBridgeChannel
 
-with SandboxBridge(Path("sandbox/catalog"), Path("sandbox/state")) as bridge:
-    canal = WhatsAppBridgeChannel(bridge.base_url, timeout=5)
-    resultado = canal.sync("sunny")
+with SandboxBridge(Path("catalog"), Path("state")) as bridge:
+    result = WhatsAppBridgeChannel(bridge.base_url, timeout=5).sync("sunny-br-warm")
 ```
 
-- `SandboxBridge(catalog_dir: Path, state_dir: Path)` é um context manager;
-  expõe `.base_url` e `.port` enquanto aberto. Usa `ThreadingHTTPServer`,
-  somente `127.0.0.1`, porta efêmera; encerra servidor e thread ao sair.
-- O catálogo aprovado contém JPEGs `<slug>.jpg`, até 2 MiB, verificados com Pillow.
-  Slug: `[a-z0-9][a-z0-9-]{0,100}`. Links para fora do catálogo são proibidos.
-- Estado separado: `state_dir/current.jpg`, não o arquivo do catálogo.
-  Cópia atômica e idempotente: conteúdo igual não reescreve o arquivo.
-- `GET /health`: `{"status":"connected","sandbox":true}`.
-- `GET /profile-picture?slug=sunny` e `POST /profile-picture` exigem
-  `X-Mascot-Wardrobe-Sandbox: 1`; qualquer cabeçalho `Origin` é rejeitado.
-  POST aceita **somente** `{"slug":"sunny"}`. GET também aceita somente slug.
-  `target`, `jid`, caminhos, traversal e corpos excessivos são rejeitados.
-- GET retorna `target:self`, `sandbox:true`, `matches`, `imageBase64`,
-  `remoteSha256`, `slug` e `verification:sandbox-exact-source-bytes`.
-  Sem foto atual, imagem e hash são `null` e `matches:false`.
-- POST retorna `success:true`, `target:self`, `sandbox:true`, `verified:false`,
-  `slug` e `sourceSha256`. Esse reconhecimento **não** verifica a alteração.
+- `SandboxBridge(catalog_dir, state_dir)` is a context manager exposing `.base_url` and `.port`.
+  It uses `ThreadingHTTPServer`, binds to `127.0.0.1` only on an ephemeral port and stops the
+  server and thread on exit.
+- The catalog holds JPEGs named `<slug>.jpg`, at most 2 MiB, checked with Pillow. Slugs match
+  `[a-z0-9][a-z0-9-]{0,100}`. The catalog and state directories must not overlap.
+- State is `state_dir/current.jpg`, written atomically; identical content is not rewritten.
+- `GET /health` returns `{"status":"connected","sandbox":true}`.
+- `GET /profile-picture?slug=...` and `POST /profile-picture` require the header
+  `X-Mascot-Wardrobe-Sandbox: 1`, a local contract-test header and not part of any real API.
+  Any `Origin` header is rejected. POST accepts only `{"slug": "..."}`; targets, paths,
+  traversal and oversized bodies are rejected.
+- The client checks health, reads the current state, posts only when needed and then
+  reads back again; a missing read-back confirmation is a `RuntimeError`. There are no hidden
+  retries.
+- The base URL must be HTTP with a literal loopback IP and an explicit port other than 3000.
+  `localhost`, credentials, queries, fragments and base paths are refused. Proxies and
+  redirects are disabled.
+- The client returns `action` (`updated` or `unchanged`), `verified: true`, `sandbox: true`
+  and the SHA-256 of the read-back bytes. This verifies the simulated copy only.
 
-`WhatsAppBridgeChannel(base_url, timeout=5).sync(slug: str) -> dict` verifica health,
-consulta GET, valida alvo/flag sandbox/tipos/hash e só então considera POST.
-Depois de POST, um novo GET é obrigatório; ausência de confirmação gera
-`RuntimeError`. Não há retries ocultos ou opção para habilitar produção.
-Retorna `slug`, `action` (`updated` ou `unchanged`), `verified:true`, `target:self`,
-`sandbox:true`, `remote_sha256` e `verification`. `.current_sha256` guarda o hash
-confirmado em memória e é limpo no início de cada tentativa.
+## Security limits
 
-A URL deve ser HTTP com IP loopback literal e porta explícita, diferente de 3000.
-DNS/`localhost`, credenciais na URL, query, fragmento e caminho base são recusados;
-porta 3000 é recusada antes de qualquer rede. Proxy e redirects são desabilitados.
-Health não sandbox ou leitura com alvo diferente impedem o POST.
-`self` significa exclusivamente a própria conta no contrato legado; o sandbox
-não tem conta. Igualdade de bytes só prova a cópia **simulada**, não uma foto
-publicada pelo WhatsApp, que pode transformar imagens.
-
-## Exportadores de arquivos
-
-```python
-from mascot_wardrobe.channels import FileExportChannel
-
-exportador = FileExportChannel(Path("sandbox/output"), "telegram")
-resultado = exportador.export(
-    "sunny",
-    Path("assets/sunny.jpg"),
-    Path("assets/atlas.png"),
-    Path("assets/manifest.json"),
-)
-```
-
-API: `FileExportChannel(sandbox_dir: Path, channel: str)` e
-`.export(slug: str, portrait: Path, atlas: Path, manifest: Path) -> dict`.
-Canais: `whatsapp`, `telegram`, `discord`, `hermes-cli`.
-Copia bytes sem transformação para `<sandbox_dir>/<channel>/<slug>/<nome-original>`;
-os três nomes precisam ser distintos. Preserva também o manifesto original.
-Valida entradas/destinos antes de escrever; recusa saída simbólica e arquivos
-fora da raiz declarada. Escrita atômica por arquivo, manifesto por último;
-não oferece transação atômica do conjunto. Repetição igual não reescreve.
-Retorna `slug`, `channel`, `sandbox:true`, `action:exported|unchanged`,
-`remote_sync:false`, `verified:false` e `files` (mapa portrait/atlas/manifest).
-Não faz nenhuma chamada de bot nem afirma sincronização real.
-
-## Limite de segurança e extensão planejada
-
-Catálogo e estado não podem se sobrepor.
-A sandbox é uma fronteira lógica de aplicação, **não isolamento do sistema
-operacional contra root**. Outro processo privilegiado pode trocar diretórios,
-arquivos ou falsificar um servidor com `sandbox:true`; essa flag não autentica
-um servidor hostil. Execute em diretórios dedicados, sem escritores concorrentes.
-
-Telegram, Discord e integração real do canal `hermes-cli` são **apenas planejados**.
-Uma futura extensão deverá separar `prepare(slug) -> artefatos`,
-`apply(artefatos) -> reconhecimento` e `readback() -> evidência`, com política
-explícita de destino/autorização. Reconhecimento nunca substituirá leitura
-posterior. Essa interface não está implementada; não existem tokens ou bypasses.
-
-## Testes locais
-
-```sh
-PYTHONPATH=src python -m unittest discover -s tests -p test_channels.py -v
-```
-
-Os testes usam HTTP real somente em servidores locais efêmeros e arquivos
-temporários; incluem idempotência, readback e recusas antes de efeitos.
+The sandbox is a logical boundary in the application, not operating system isolation. A
+privileged process could swap directories or impersonate the bridge, and the `sandbox: true`
+flag does not authenticate a hostile server. Run it in dedicated folders without competing
+writers.

@@ -1,55 +1,69 @@
-# Arquitetura e limites
+# Architecture
 
-Este projeto é uma cópia de desenvolvimento: não instala serviços, não altera configurações externas e não publica fotos em contas reais.
+mascot-wardrobe prepares six outfits for a mascot once, then selects one by temperature. It is
+a small library plus a CLI. It installs no services, changes no real accounts and makes no
+network calls except the opt-in Open-Meteo weather request.
 
-## Linguagem do domínio
+## Domain language
 
-- **Mascote**: identidade, PNG de origem e caixa corporal normalizada. Não há reconhecimento automático do rosto.
-- **Perfil do país**: cinco limites crescentes que definem seis categorias, paleta e descrição das peças.
-- **Guarda-roupa**: seis conjuntos preparados antes da seleção por clima.
-- **Categoria**: muito frio, frio, ameno, ambiente, calor e muito calor. O pedido enumerava cinco nomes para seis faixas; `ameno` é a sexta categoria adotada.
-- **Seleção**: escolhe um conjunto existente pela temperatura, sem gerar imagens a cada consulta.
-- **Canal**: aplicação/verificação local do conjunto ou exportação de arquivos, não uma promessa de publicação remota.
+- **Mascot**: an id, a source PNG path and a normalized body box. No face detection.
+- **Country profile**: five strictly increasing Celsius boundaries that define six categories,
+  plus a palette and garment descriptions.
+- **Category**: `very_cold`, `cold`, `mild`, `ambient`, `warm`, `very_hot`. `mild` is the
+  intentional sixth category.
+- **Wardrobe**: the six outfits, generated once and recorded in `manifest.json`.
+- **Selection**: choosing an existing outfit by temperature. It reads the manifest only.
+- **Channel**: a destination for a selected outfit. All channels are export-only (files, or a
+  loopback test bridge); none is a real account.
 
-## Organização DDD pragmática
+## Layers
 
-- `domain/`: objetos de valor e regras puras; não conhece rede, Pillow ou armazenamento.
-- `application/`: casos de uso de seleção e coordenação entre os contextos.
-- `wardrobe/`: contexto delimitado de preparação das roupas; `WardrobeAgent` coordena um `Renderer` substituível. O compositor padrão usa Pillow localmente.
-- `channels/`: contexto de distribuição; inclui bridge HTTP sandbox compatível com a lógica de atualização/leitura do legado e exportadores de arquivos.
-- `infrastructure/`: repositório JSON de perfis e adaptador meteorológico.
-- `interfaces/`: entrada de linha de comando.
-- `legacy/`: cópia de referência do programa anterior; não é importada pelo novo pacote. Seus scripts não são o ponto de entrada recomendado e não devem ser executados contra produção.
+The layering is pragmatic, not a claim of full enterprise architecture.
 
-É uma separação por contextos e responsabilidades, não uma alegação de arquitetura enterprise completa. O contexto `wardrobe` reúne caso de uso e adaptador gráfico no mesmo módulo; a porta `Renderer` permite separar ou substituir o compositor sem alterar as regras de temperatura.
+| Layer | Package | Responsibility |
+| --- | --- | --- |
+| Domain | `mascot_wardrobe.domain` | Pure values and rules: `Category`, `CountryProfile`, `Mascot`, `validate_temperature`, `to_celsius`. No I/O, no Pillow, no network. |
+| Application | `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, and the `safe_output` path guard. |
+| Adapters | `mascot_wardrobe.wardrobe` | `WardrobeAgent` (generation, manifest, idempotent reuse, atlas and JPEG assets). |
+| | `mascot_wardrobe.wardrobe.composer` | Pillow compositor: `LocalComposer`, `OutfitBrief`, the `Renderer` protocol, `CATEGORIES`, `_validate_brief`. |
+| | `mascot_wardrobe.channels` | `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
+| | `mascot_wardrobe.infrastructure` | `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
+| Interface | `mascot_wardrobe.interfaces.cli` | `generate`, `select`, `sandbox`, `demo` commands. |
 
-## Perfis ajustáveis
+Dependencies point inwards: the CLI calls the application layer, which uses the domain, the
+wardrobe agent, channels and infrastructure. The domain imports nothing from the other layers.
 
-Os perfis de BR, GB, US e JP são presets de produto, não padrões oficiais, recomendações de saúde nem descrições de todo o clima de um país. A pessoa informa seu país explicitamente; não há rastreamento, geolocalização ou inferência de nacionalidade. Um país pode exigir perfis regionais futuros.
+### The composer split
 
-BR, em °C, com o limite pertencendo à faixa superior:
+`wardrobe/composer.py` holds the Pillow compositor and its types. `wardrobe/__init__.py` holds
+the use case (`WardrobeAgent`), atlas and JPEG helpers, path safety (`_safe_root`,
+`_safe_target`) and request validation, and re-exports the composer names so
+`from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief, Renderer` keeps working. The
+`Renderer` protocol lets a different compositor be injected without touching temperature rules.
 
-- Muito frio: abaixo de 5.
-- Frio: de 5 até menos de 15.
-- Ameno: de 15 até menos de 20.
-- Ambiente: de 20 até menos de 25.
-- Calor: de 25 até menos de 32.
-- Muito calor: a partir de 32.
+## Data flow
 
-## O que o agente de roupas faz hoje
+1. `generate`: `prepare_wardrobe` validates the output path with `safe_output`, loads the
+   profile, and `WardrobeAgent.generate` renders six outfits and writes assets plus
+   `manifest.json`. A repeat with an identical request verifies and reuses existing assets.
+2. `select`: `select_outfit` reads and validates the manifest (size, country, six distinct
+   categories, safe slug and file names), converts the temperature to Celsius, classifies it
+   with the profile and returns the paths of the existing outfit. No image is touched.
+3. `sandbox` and `demo`: the selection is exported. `--channel whatsapp` (the default) routes
+   through the loopback bridge via `sync_sandbox`; `telegram`, `discord` and `hermes-cli` use
+   `export_outfit` and `FileExportChannel`. Each runs twice to show idempotency.
 
-Recebe PNG e região corporal, prepara seis composições geométricas locais e exporta retratos e atlas. Não usa um modelo generativo, não interpreta semanticamente anatomias e não cria roupas realistas. As descrições de peças ficam disponíveis como briefs para um futuro provedor injetável, mas o compositor atual segue moldes fixos.
+## Safety rules
 
-A cara fora da caixa corporal é preservada pixel a pixel. Atlas usam deslocamentos geométricos, não animação articulada. Não há cobrança de inferência nem chamadas de LLM na execução deste pacote.
+- `safe_output` resolves an output directory and rejects `..` and symbolic links anywhere in its
+  ancestry. There is no machine-specific allowlist; the caller chooses the root.
+- Names and slugs are validated (`[a-z0-9][a-z0-9-]*`), input PNG size is bounded (16
+  megapixels, static PNG only), and the manifest size is bounded.
+- Writes are atomic per file. Identical repeated exports do not rewrite files.
+- Weather failures raise `WeatherError`; no temperature is ever invented.
 
-## Integração sem implantação
+## Presets and limits
 
-O contrato do bridge legado é exercitado contra HTTP loopback efêmero e arquivos separados. A leitura posterior verifica bytes no sandbox; não comprova publicação no WhatsApp real, que pode recomprimir imagens. Telegram, Discord e `hermes-cli` recebem exportações locais, não alterações de contas ou instalação automática de mascotes.
-
-Uma publicação real futura exige autorização de destino, credenciais fora do repositório, adaptação por provedor e leitura posterior. Não habilitar o código legado como atalho para esse fluxo.
-
-## Segurança operacional
-
-A sandbox é uma barreira lógica, não isolamento do sistema operacional. Execute em pastas dedicadas sem outros escritores privilegiados. Não copiar `.env`, autenticação do bridge, logs, sessões ou estado pessoal para GitHub. `audit/`, `sandbox/` e arquivos de ambiente ficam ignorados. O inventário local em `audit/production-source-baseline.json` permite conferir que a cópia não modificou os arquivos conhecidos de produção; arquivos operacionais podem mudar independentemente por tarefas já ativas.
-
-O exemplo visual foi convertido do SVG preexistente. A presença do arquivo não concede direitos sobre marcas ou personagens de terceiros; substitua por um mascote próprio e revise as licenças antes de publicar.
+BR, GB, US and JP are adjustable product presets (see `configuration.md`), not universal truth.
+The compositor is geometric and does not understand images (see `wardrobe.md`). Decisions are
+recorded in `docs/adr/`.

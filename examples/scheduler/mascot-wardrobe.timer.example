@@ -1,0 +1,11 @@
+# Example only. Never installed by mascot-wardrobe.
+# A systemd user timer that fires every 6 hours.
+[Unit]
+Description=Run the mascot-wardrobe export every 6 hours (example)
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
