@@ -45,12 +45,7 @@ def _tracked_text_files():
     ).stdout.splitlines()
     for name in out:
         path = ROOT / name
-        if (
-            path.resolve() == SELF
-            or not path.is_file()
-            or name.startswith("plans/")
-            or path.suffix not in TEXT_SUFFIXES
-        ):
+        if path.resolve() == SELF or not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
         yield name, path
 
