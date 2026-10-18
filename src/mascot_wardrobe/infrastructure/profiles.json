@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "notice": "Adjustable product presets; they are not official meteorological standards and do not represent every climate of a country.",
+  "profiles": {
+    "BR": {
+      "thresholds_c": [
+        5,
+        15,
+        20,
+        25,
+        32
+      ],
+      "palette": [
+        "#43537D",
+        "#437F8D",
+        "#68AD94",
+        "#87BDDC",
+        "#E5A56B",
+        "#ED8066"
+      ],
+      "garments": [
+        "padded coat",
+        "closed jacket",
+        "light cardigan",
+        "t-shirt",
+        "sleeveless tee",
+        "very light tank top"
+      ]
+    },
+    "GB": {
+      "thresholds_c": [
+        -5,
+        5,
+        12,
+        18,
+        25
+      ],
+      "palette": [
+        "#34445B",
+        "#496773",
+        "#748B84",
+        "#8BAEB2",
+        "#C7B493",
+        "#DEA76E"
+      ],
+      "garments": [
+        "thermal coat",
+        "wool coat",
+        "light jacket",
+        "short-sleeve t-shirt",
+        "light t-shirt",
+        "light tank top"
+      ]
+    },
+    "US": {
+      "thresholds_c": [
+        -10,
+        0,
+        12,
+        24,
+        32
+      ],
+      "palette": [
+        "#43506D",
+        "#4C738B",
+        "#729D8C",
+        "#95BCD2",
+        "#DBA26D",
+        "#E58F6A"
+      ],
+      "garments": [
+        "thermal coat",
+        "padded jacket",
+        "light sweatshirt",
+        "t-shirt",
+        "sleeveless tee",
+        "light tank top"
+      ]
+    },
+    "JP": {
+      "thresholds_c": [
+        0,
+        10,
+        18,
+        25,
+        33
+      ],
+      "palette": [
+        "#49526F",
+        "#587284",
+        "#7D9C95",
+        "#A2BBC2",
+        "#D6B284",
+        "#DE9682"
+      ],
+      "garments": [
+        "thermal coat",
+        "winter jacket",
+        "light cardigan",
+        "t-shirt",
+        "light t-shirt",
+        "light tank top"
+      ]
+    }
+  }
+}
