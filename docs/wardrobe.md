@@ -23,7 +23,9 @@ the box, including the head, are identical to the source. There is no face detec
 responsible for choosing a box that covers the body and not the face. Adjust it with
 `--body-box` and check the six results.
 
-The palette comes from the country profile. Garment names in a profile are descriptions for a
+The palette comes from the country profile. The default compositor uses only its first color
+(garment) and last color (accent) for all six outfits; the other entries are validated and
+recorded in the manifest but not painted. Garment names in a profile are descriptions for a
 possible future provider; the default compositor uses a fixed per-category template (padded
 coat, jacket, sweater, t-shirt, tank top, light strappy piece) and does not interpret the text.
 
