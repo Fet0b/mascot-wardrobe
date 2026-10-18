@@ -2,11 +2,12 @@
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a security problem. Use the hosting repository's private
-vulnerability reporting feature if it is enabled; otherwise contact the maintainers privately.
-This repository is currently developed locally and has no public remote, so no reporting
-channel can be verified yet. Once the project is hosted, this section will name the exact
-channel.
+Please do not open a public issue for a security problem. Private vulnerability reporting is
+enabled for this repository. Submit a confidential report at:
+
+https://github.com/Fet0b/mascot-wardrobe/security/advisories/new
+
+The repository's Security tab also provides the "Report a vulnerability" action.
 
 Include the affected version, steps to reproduce and the impact. Reports are handled on a best
 effort basis; there is no service level agreement.

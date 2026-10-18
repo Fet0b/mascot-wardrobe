@@ -1,6 +1,7 @@
 """Safety and behaviour of the helper scripts, exercised without touching the real repo evidence."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -97,15 +98,22 @@ def test_script_files_are_executable_bash():
         assert script.stat().st_mode & 0o111
 
 
+def _find_tool(name: str) -> str | None:
+    """Prefer a tool on PATH (CI installs), falling back to the repo .venv (dev checkout)."""
+    found = shutil.which(name)
+    if found:
+        return found
+    local = ROOT / ".venv" / "bin" / name
+    return str(local) if local.exists() else None
+
+
 def _scan_repo(path: Path) -> Path:
     """A throwaway git repo with an empty detect-secrets baseline."""
-    tools = ROOT / ".venv" / "bin"
-    if not (tools / "detect-secrets").exists() or not (tools / "detect-secrets-hook").exists():
-        pytest.skip("needs the repo .venv with detect-secrets (dev checkout only, not an extracted sdist)")
+    scan, hook = _find_tool("detect-secrets"), _find_tool("detect-secrets-hook")
+    if not scan or not hook:
+        pytest.skip("needs detect-secrets and detect-secrets-hook on PATH or in the repo .venv")
     repo = _git_repo(path)
-    baseline = subprocess.run(
-        [str(tools / "detect-secrets"), "scan"], cwd=repo, capture_output=True, text=True, check=True
-    )
+    baseline = subprocess.run([scan, "scan"], cwd=repo, capture_output=True, text=True, check=True)
     (repo / ".secrets.baseline").write_text(baseline.stdout, encoding="utf-8")
     (repo / "README.txt").write_text("nothing to see\n", encoding="utf-8")
     return repo

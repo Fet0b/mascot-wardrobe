@@ -104,8 +104,8 @@ anywhere in their ancestry are rejected.
 
 Weather is optional and is requested only with `--live-weather` plus explicit `--latitude` and
 `--longitude`. The project depends on the public Open-Meteo forecast API
-(`https://api.open-meteo.com/v1/forecast`) only for this opt-in feature; nothing else uses the
-network. Live weather is Celsius only, so combining it with `--unit F` is an error.
+(`https://api.open-meteo.com/v1/forecast`) only for this opt-in feature; nothing else makes external
+requests. Live weather is Celsius only, so combining it with `--unit F` is an error.
 
 ### Timezone and time semantics
 
