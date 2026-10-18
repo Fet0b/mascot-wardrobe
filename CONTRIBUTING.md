@@ -25,6 +25,10 @@ interpreter needs the build module (`pip install build`, already part of the `de
 into a fresh directory and never deletes existing evidence. CI exercises Python 3.11 to 3.13;
 locally only 3.12 has been run, and 3.14 is untested.
 
+The sdist is complete (see `MANIFEST.in`) and the wheel is runtime-only. In an extracted sdist
+there is no git checkout, so `scripts/*` and the tests that rely on `git ls-files` or the repo
+`.venv` are checkout-only; those tests skip with a stated reason instead of faking results.
+
 ## Guidelines
 
 - Test first. New or changed behavior comes with a test that failed before the change.

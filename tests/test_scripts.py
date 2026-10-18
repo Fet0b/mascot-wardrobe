@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 E2E = ROOT / "scripts" / "e2e-smoke.sh"
 SCAN = ROOT / "scripts" / "scan-secrets.sh"
@@ -97,8 +99,10 @@ def test_script_files_are_executable_bash():
 
 def _scan_repo(path: Path) -> Path:
     """A throwaway git repo with an empty detect-secrets baseline."""
-    repo = _git_repo(path)
     tools = ROOT / ".venv" / "bin"
+    if not (tools / "detect-secrets").exists() or not (tools / "detect-secrets-hook").exists():
+        pytest.skip("needs the repo .venv with detect-secrets (dev checkout only, not an extracted sdist)")
+    repo = _git_repo(path)
     baseline = subprocess.run(
         [str(tools / "detect-secrets"), "scan"], cwd=repo, capture_output=True, text=True, check=True
     )

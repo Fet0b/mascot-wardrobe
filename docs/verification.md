@@ -31,6 +31,15 @@ have the build module (`pip install build`); the script stops with a message oth
 is used. Each run creates its own `run.*` directory inside it with `mktemp -d`, never touches
 existing content and keeps the run directory afterwards.
 
+## Source distribution
+
+`tests/test_sdist.py` builds the real sdist (`python -m build --sdist`) and inventories it with
+`tarfile`: public docs, art, assets, examples, scripts, plans, tests, CI and the secret baseline
+must be present, private or generated paths absent, every relative README link must resolve inside
+the sdist, and a wheel built from the unpacked sdist must be runtime-only. `scripts/*` need a git
+checkout (`git ls-files`) and are checkout-only in an extracted sdist; tests that need git or the
+repo `.venv` skip with a clear reason there.
+
 ## Secret scanning
 
 `scripts/scan-secrets.sh [REPORT]` runs `detect-secrets-hook --baseline .secrets.baseline` over tracked

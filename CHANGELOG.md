@@ -7,6 +7,9 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- The source distribution is now complete (explicit `MANIFEST.in`): docs, art, assets, examples,
+  scripts, plans, tests, CI workflow and secret baseline are included so the README links resolve;
+  the wheel stays runtime-only. A test builds the real sdist and inventories it.
 - Hero banner re-laid out: the title and tagline fit the left column with a clear gap to the
   mascot, checked by a layout test.
 - `scripts/e2e-smoke.sh` picks `$PYTHON`, else `.venv/bin/python`, else `python3`, requires the

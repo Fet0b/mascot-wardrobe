@@ -1,0 +1,25 @@
+# Explicit source distribution contents. The wheel stays runtime-only (see pyproject.toml).
+include README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md MANIFEST.in
+include pyproject.toml .secrets.baseline .gitignore
+include .github/workflows/ci.yml
+recursive-include art *.py *.svg *.md
+recursive-include assets *.png
+recursive-include examples *.png *.example
+recursive-include docs *.md
+recursive-include scripts *.sh
+recursive-include plans *.md
+recursive-include tests *.py
+recursive-include src *.py *.json
+
+prune .git
+prune .venv
+prune .claude
+prune dist
+prune build
+prune audit
+prune sandbox
+prune state
+prune logs
+prune output
+prune mascot-wardrobe-out
+global-exclude .env .env.* *.log *.lock *.pyc *.egg-info __pycache__ .DS_Store

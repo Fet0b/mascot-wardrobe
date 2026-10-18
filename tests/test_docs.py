@@ -36,6 +36,8 @@ FORBIDDEN = {
 
 
 def _tracked_text_files():
+    if not (ROOT / ".git").exists():
+        pytest.skip("needs a git checkout (git ls-files); not available in an extracted sdist")
     out = subprocess.run(
         ["git", "ls-files", "-co", "--exclude-standard"],
         cwd=ROOT,
