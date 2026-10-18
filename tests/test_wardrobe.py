@@ -348,6 +348,31 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(WardrobeAgent(ConfiguredComposer()).generate(mascot, profile, output), target)
             self.assertEqual(target.read_bytes(), original)
 
+    def test_default_renderer_binds_a_template_revision_so_stale_catalogs_are_rejected(self):
+        from unittest.mock import patch
+
+        from mascot_wardrobe.wardrobe import LocalComposer, WardrobeAgent
+
+        config = LocalComposer.cache_config
+        self.assertEqual(json.loads(json.dumps(config)), config)
+        self.assertGreaterEqual(config["templates"], 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            output = root / "out"
+            # Keep the concrete renderer class unchanged: only the template configuration differs.
+            with patch.object(LocalComposer, "cache_config", None):
+                legacy = WardrobeAgent(LocalComposer()).generate(mascot, profile, output)
+            self.assertIsNone(json.loads(legacy.read_text())["request"]["renderer_config"])
+            before = legacy.read_bytes()
+            with self.assertRaises(ValueError):
+                WardrobeAgent(LocalComposer()).generate(mascot, profile, output)
+            self.assertEqual(legacy.read_bytes(), before)
+            fresh = WardrobeAgent(LocalComposer()).generate(mascot, profile, root / "fresh")
+            self.assertEqual(
+                json.loads(fresh.read_text())["request"]["renderer_config"], LocalComposer.cache_config
+            )
+
     def test_reuse_rejects_incomplete_malformed_or_unsafe_cache_without_rendering(self):
         from copy import deepcopy
 

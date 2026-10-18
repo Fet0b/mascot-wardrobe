@@ -36,12 +36,14 @@ For development use `pip install -e '.[dev]'`.
 ## Quickstart
 
 Run these from the root of the repository checkout, where `examples/mascot.png` lives. Outputs
-go to `./mascot-wardrobe-out/` by default (ignored by git). Replace the mascot path with your
-own PNG to use your own mascot.
+go to `./mascot-wardrobe-out/` by default (ignored by git). Replace the mascot path and the
+body box with your own to use your own mascot.
 
 ```sh
 # 1. Generate six outfits once (country is always explicit; no geolocation).
-mascot-wardrobe generate --mascot examples/mascot.png --id sunny --country BR
+# The example mascot ships with its own explicit body box (arms to hem, below the head).
+mascot-wardrobe generate --mascot examples/mascot.png --id sunny --country BR \
+  --body-box 0.125 0.555 0.875 0.915
 
 # 2. Select by temperature as often as you like (28 C is "warm" in the BR preset).
 mascot-wardrobe select --manifest mascot-wardrobe-out/catalog/manifest.json \
@@ -57,7 +59,8 @@ mascot-wardrobe demo --manifest mascot-wardrobe-out/catalog/manifest.json \
 Files are copied to `mascot-wardrobe-out/exports/<channel>/<slug>/`.
 
 Use `--body-box X1 Y1 X2 Y2` (normalized, default `0.22 0.60 0.78 0.88`) to tell the compositor
-where your mascot's body is. See [docs/wardrobe.md](docs/wardrobe.md).
+where your mascot's body is: the templates are fitted to that box (sleeves, hem, neckline), they
+do not detect anatomy. See [docs/wardrobe.md](docs/wardrobe.md).
 
 ## Offline deterministic demo
 

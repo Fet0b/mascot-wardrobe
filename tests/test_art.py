@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 GENERATOR = ROOT / "art" / "generate_art.py"
 OUTPUTS = ("art/mascot.svg", "examples/mascot.png", "assets/hero.png", "assets/contact-sheet.png")
 BODY_BOX = (0.22, 0.60, 0.78, 0.88)
+# Explicit box fitted to the example mascot (body plus arm nubs, from the neckline down to the hem).
+EXAMPLE_BOX = (0.125, 0.555, 0.875, 0.915)
 
 
 def _generate(out: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -66,17 +68,18 @@ def test_svg_is_well_formed_with_named_groups(fresh):
     assert root.get("viewBox") == "0 0 512 512"
 
 
-def test_pipeline_gives_six_distinct_outfits_and_keeps_pixels_outside_body_box(fresh):
+@pytest.mark.parametrize("body_box", [BODY_BOX, EXAMPLE_BOX])
+def test_pipeline_gives_six_distinct_outfits_and_keeps_pixels_outside_body_box(fresh, body_box):
     source_path = ROOT / "examples" / "mascot.png"
     with tempfile.TemporaryDirectory() as out:
-        manifest = prepare_wardrobe(source_path, "mascot", "BR", Path(out) / "catalog")
+        manifest = prepare_wardrobe(source_path, "mascot", "BR", Path(out) / "catalog", body_box=body_box)
         import json
 
         outfits = json.loads(manifest.read_text(encoding="utf-8"))["outfits"]
         assert len({o["sha256"]["png"] for o in outfits}) == 6
         with Image.open(source_path) as image:
             source = image.convert("RGBA")
-        box = tuple(int(v * n) for v, n in zip(BODY_BOX, source.size * 2, strict=True))
+        box = tuple(int(v * n) for v, n in zip(body_box, source.size * 2, strict=True))
         for outfit in outfits:
             with Image.open(manifest.parent / outfit["png"]) as image:
                 dressed = image.convert("RGBA")
@@ -142,3 +145,130 @@ def test_hero_text_fits_left_column_with_a_clear_gap_to_the_mascot():
         assert column_left <= x0 and x1 <= column_right, f"{key} leaves the left column"
         assert mascot[0] - x1 >= 40, f"{key} is closer than 40 px to the mascot"
     assert column_right <= mascot[0]
+
+
+# --------------------------------------------------------------------------- fitted clothing geometry
+CATEGORY_NAMES = ("very_cold", "cold", "mild", "ambient", "warm", "very_hot")
+
+
+def _group_alpha(module, names):
+    """Alpha of the example mascot drawn from the named shape groups only."""
+    saved = module.GROUPS
+    module.GROUPS = [group for group in saved if group[0] in names]
+    try:
+        return module.render_mascot(512).getchannel("A")
+    finally:
+        module.GROUPS = saved
+
+
+@pytest.fixture(scope="module")
+def dressed(fresh):
+    """The six real pipeline outfits for the example mascot, with masks of the visible body parts."""
+    module = _load_generator()
+    source_path = fresh[0] / "examples/mascot.png"
+    with tempfile.TemporaryDirectory() as out:
+        manifest = prepare_wardrobe(source_path, "mascot", "BR", Path(out) / "catalog", body_box=EXAMPLE_BOX)
+        import json
+
+        outfits = json.loads(manifest.read_text(encoding="utf-8"))["outfits"]
+        images = {}
+        for outfit in outfits:
+            with Image.open(manifest.parent / outfit["png"]) as image:
+                images[outfit["category"]] = image.convert("RGBA")
+    with Image.open(source_path) as image:
+        source = image.convert("RGBA")
+    head = _group_alpha(module, ("ears", "head", "face"))
+    body = _group_alpha(module, ("body",))
+    box = tuple(int(v * 512) for v in EXAMPLE_BOX)
+    visible = {
+        (x, y)
+        for y in range(box[1], box[3])
+        for x in range(box[0], box[2])
+        if body.getpixel((x, y)) == 255 and head.getpixel((x, y)) == 0
+    }
+    return {"source": source, "images": images, "head": head, "visible": visible, "box": box}
+
+
+def _changed(data, category):
+    source, image = data["source"], data["images"][category]
+    return {pos for pos in data["visible"] if source.getpixel(pos) != image.getpixel(pos)}
+
+
+@pytest.mark.parametrize("category", CATEGORY_NAMES)
+def test_clothes_never_touch_head_face_or_ears_even_inside_the_box(dressed, category):
+    source, image, head = dressed["source"], dressed["images"][category], dressed["head"]
+    x0, y0, x1, y1 = dressed["box"]
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            if head.getpixel((x, y)):
+                assert image.getpixel((x, y)) == source.getpixel((x, y)), (category, x, y)
+
+
+@pytest.mark.parametrize("category", CATEGORY_NAMES)
+def test_every_outfit_wraps_the_whole_torso_to_the_hem(dressed, category):
+    x0, y0, x1, y1 = dressed["box"]
+    height = y1 - y0
+    changed = _changed(dressed, category)
+    torso = [
+        (x, y)
+        for x, y in dressed["visible"]
+        if y >= y0 + 0.45 * height and 0.15 <= (x - x0) / (x1 - x0) <= 0.85
+    ]
+    coverage = sum(pos in changed for pos in torso) / len(torso)
+    assert coverage >= 0.9, f"{category} covers only {coverage:.0%} of the lower torso"
+    middle_row = [x for x, y in changed if y == y0 + height // 2]
+    torso_row = [x for x, y in dressed["visible"] if y == y0 + height // 2 and 100 <= x < 412]  # not the arms
+    left_edge, right_edge = min(torso_row), max(torso_row)
+    assert min(middle_row) <= left_edge + 12 and max(middle_row) >= right_edge - 12, "side margins are bare"
+    assert max(y for x, y in changed if 0.3 <= (x - x0) / (x1 - x0) <= 0.7) >= y1 - 6, "hem stops short"
+
+
+@pytest.mark.parametrize("category", CATEGORY_NAMES)
+def test_every_outfit_meets_the_shoulders(dressed, category):
+    x0, _, x1, _ = dressed["box"]
+    changed = _changed(dressed, category)
+    for lo, hi in ((0.15, 0.4), (0.6, 0.85)):
+        side = {(x, y) for x, y in dressed["visible"] if lo <= (x - x0) / (x1 - x0) <= hi}
+        top = min(y for _, y in side)
+        assert min(y for _, y in side & changed) <= top + 6, f"{category} floats below the shoulders"
+
+
+def test_sleeves_follow_the_weather(dressed):
+    x0, _, x1, _ = dressed["box"]
+    arms = {(x, y) for x, y in dressed["visible"] if x < 100 or x >= 412}
+    share = {c: len(_changed(dressed, c) & arms) / len(arms) for c in CATEGORY_NAMES}
+    for category in ("very_cold", "cold", "mild"):  # long sleeves leave only the hands bare
+        assert share[category] >= 0.7, share
+    assert 0.2 <= share["ambient"] <= 0.6, share
+    for category in ("warm", "very_hot"):
+        assert share[category] <= 0.05, share
+
+
+# --------------------------------------------------------------------------- stale clothing detection
+def _slots(module):
+    return module.portrait_slots("assets/contact-sheet.png"), module.portrait_slots("assets/hero.png")
+
+
+def test_check_compares_outfit_thumbnails_but_not_text(fresh):
+    module = _load_generator()
+    for name in ("assets/contact-sheet.png", "assets/hero.png"):
+        with Image.open(fresh[0] / name) as image:
+            new = image.convert("RGB")
+        assert module.stale_portraits(name, new.copy(), new) == []
+        slots = module.portrait_slots(name)
+        # A different garment inside one thumbnail is stale art.
+        old = new.copy()
+        x0, y0, x1, y1 = slots[-1]
+        old.paste((200, 30, 30), ((x0 + x1) // 2 - 20, (y0 + y1) // 2, (x0 + x1) // 2 + 20, y1 - 30))
+        assert module.stale_portraits(name, old, new) == [len(slots) - 1]
+        # Text rasterization may differ between Pillow versions: noise outside the thumbnails is ignored.
+        noisy = new.copy()
+        noisy.paste((0, 0, 0), (0, 0, 40, 4))
+        assert module.stale_portraits(name, noisy, new) == []
+
+
+def test_committed_thumbnails_match_the_real_pipeline(fresh):
+    module = _load_generator()
+    for name in ("assets/contact-sheet.png", "assets/hero.png"):
+        with Image.open(ROOT / name) as old, Image.open(fresh[0] / name) as new:
+            assert module.stale_portraits(name, old.convert("RGB"), new.convert("RGB")) == []

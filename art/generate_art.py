@@ -26,7 +26,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFont, ImageStat
 
 REPO = Path(__file__).resolve().parent.parent
 try:
@@ -42,6 +42,10 @@ CREAM_DEEP, MINT_DEEP, WHITE, MUTED = "#F6E2B8", "#8FD0B3", "#FFFFFF", "#5B6B88"
 OUTLINE = 8  # stroke width in design units
 SUPERSAMPLE = 4
 DESIGN = 512
+# Explicit body box for this mascot, shared by the demo images, the quickstart and the e2e script:
+# arm nubs (x 64..448 of 512), from just under the head to the hem inside the body outline.
+EXAMPLE_BODY_BOX = (0.125, 0.555, 0.875, 0.915)
+STALE_THUMBNAIL_TOLERANCE = 1.5  # mean 0..255 difference per thumbnail; text drift stays far below
 OUTPUT_NAMES = ("art/mascot.svg", "examples/mascot.png", "assets/hero.png", "assets/contact-sheet.png")
 
 
@@ -157,7 +161,8 @@ def paint(shape) -> str:
 
 
 # Each group: (svg id, comment, shapes). Painting order is list order, back to front.
-# The head ends above y=307 (top of the default body box 0.60 * 512) so outfits never touch it.
+# The head ends above y=307. The default body box starts there; EXAMPLE_BODY_BOX starts higher and
+# relies on the compositor neckline, which leaves the lowest part of the head untouched.
 GROUPS = [
     ("shadow", "Soft ground shadow under the feet.", [Ellipse(256, 494, 150, 12, INK, opacity=0.14)]),
     (
@@ -170,7 +175,7 @@ GROUPS = [
     ),
     (
         "body",
-        "Round body. Outfits are drawn over the body box (0.22,0.60)-(0.78,0.88) of the PNG.",
+        "Round body with arm nubs. Outfits are fitted to the box (0.125,0.555)-(0.875,0.915) of the PNG.",
         [
             Ellipse(98, 352, 28, 40, CREAM, rot=14, stroke=True),
             Ellipse(414, 352, 28, 40, CREAM, rot=-14, stroke=True),
@@ -290,7 +295,7 @@ def build_catalog(mascot_png: Path, workdir: Path) -> list[dict]:
     """Run the real pipeline (BR preset) and return outfits with image, label and range."""
     import json
 
-    manifest = prepare_wardrobe(mascot_png, "mascot", "BR", workdir / "catalog")
+    manifest = prepare_wardrobe(mascot_png, "mascot", "BR", workdir / "catalog", body_box=EXAMPLE_BODY_BOX)
     outfits = json.loads(manifest.read_text(encoding="utf-8"))["outfits"]
     profile = load_profile("BR")
     bounds = profile.thresholds_c
@@ -308,19 +313,65 @@ def build_catalog(mascot_png: Path, workdir: Path) -> list[dict]:
     return result
 
 
+SHEET_PAD, SHEET_CARD, SHEET_COLS, SHEET_PORTRAIT = 40, (400, 410), 3, 290
+HERO_PICKS = (0, 3, 5)  # very cold, ambient, very hot
+HERO_THUMB = 150
+
+
+def sheet_card(index: int) -> tuple[int, int]:
+    col, row = index % SHEET_COLS, index // SHEET_COLS
+    return (
+        SHEET_PAD + col * (SHEET_CARD[0] + SHEET_PAD),
+        70 + SHEET_PAD + row * (SHEET_CARD[1] + SHEET_PAD),
+    )
+
+
+def hero_center(slot: int) -> int:
+    return 1070 + 85 + slot * 150
+
+
+def portrait_slots(name: str) -> list[tuple[int, int, int, int]]:
+    """Output-pixel boxes of the outfit thumbnails in a composite image (no text inside them)."""
+    if name == "assets/contact-sheet.png":
+        boxes = []
+        for index in range(6):
+            x, y = sheet_card(index)
+            left, top = x + (SHEET_CARD[0] - SHEET_PORTRAIT) // 2, y + 14
+            boxes.append((left, top, left + SHEET_PORTRAIT, top + SHEET_PORTRAIT))
+        return boxes
+    if name == "assets/hero.png":
+        return [
+            (hero_center(slot) - HERO_THUMB // 2, 200, hero_center(slot) + HERO_THUMB // 2, 200 + HERO_THUMB)
+            for slot in range(len(HERO_PICKS))
+        ]
+    raise ValueError(name)
+
+
+def stale_portraits(name: str, old: Image.Image, new: Image.Image) -> list[int]:
+    """Indices of outfit thumbnails whose pixels differ beyond rasterization noise.
+
+    Text depends on the Pillow wheel, but the thumbnails come from the pipeline and must match.
+    """
+    stale = []
+    for index, box in enumerate(portrait_slots(name)):
+        diff = ImageChops.difference(old.convert("RGB").crop(box), new.convert("RGB").crop(box))
+        if max(ImageStat.Stat(diff).mean) > STALE_THUMBNAIL_TOLERANCE:
+            stale.append(index)
+    return stale
+
+
 def build_contact_sheet(outfits: list[dict]) -> Image.Image:
-    pad, cw, ch, cols = 40, 400, 410, 3
+    pad, (cw, ch), cols = SHEET_PAD, SHEET_CARD, SHEET_COLS
     width = cols * cw + (cols + 1) * pad
     height = 2 * ch + 3 * pad + 70
     sheet = gradient((width, height), "#E6F6EE", "#FFF4DC")
     draw = ImageDraw.Draw(sheet)
     centered(draw, width / 2, 58, "Six outfits, one mascot", font(34), INK)
     for index, outfit in enumerate(outfits):
-        col, row = index % cols, index // cols
-        x, y = pad + col * (cw + pad), 70 + pad + row * (ch + pad)
+        x, y = sheet_card(index)
         sheet.alpha_composite(card((cw, ch), 28), (x, y))
-        portrait = outfit["image"].resize((290, 290), Image.Resampling.LANCZOS)
-        sheet.alpha_composite(portrait, (x + (cw - 290) // 2, y + 14))
+        portrait = outfit["image"].resize((SHEET_PORTRAIT, SHEET_PORTRAIT), Image.Resampling.LANCZOS)
+        sheet.alpha_composite(portrait, (x + (cw - SHEET_PORTRAIT) // 2, y + 14))
         centered(draw, x + cw / 2, y + 340, outfit["label"], font(30), INK)
         centered(draw, x + cw / 2, y + 370, f"{outfit['range']}  ·  {outfit['garment']}", font(20), MUTED)
     return sheet.convert("RGB")
@@ -403,18 +454,19 @@ def build_hero(outfits: list[dict]) -> Image.Image:
     panel = card((470 * scale, 400 * scale), 40 * scale, fill=(255, 255, 255, 170))
     hero.alpha_composite(panel, (1070 * scale, 50 * scale))
     draw = ImageDraw.Draw(hero)
-    picks = ((0, "3 °C", snowflake), (3, "21 °C", cloud), (5, "35 °C", sun))
+    picks = tuple(zip(HERO_PICKS, ("3 °C", "21 °C", "35 °C"), (snowflake, cloud, sun), strict=True))
     for slot, (index, temp, _glyph) in enumerate(picks):
-        cx = (1070 + 85 + slot * 150) * scale
-        small = outfits[index]["image"].resize((150 * scale, 150 * scale), Image.Resampling.LANCZOS)
-        hero.alpha_composite(small, (cx - 75 * scale, 200 * scale))
+        cx = hero_center(slot) * scale
+        thumb = HERO_THUMB * scale
+        small = outfits[index]["image"].resize((thumb, thumb), Image.Resampling.LANCZOS)
+        hero.alpha_composite(small, (cx - thumb // 2, 200 * scale))
         draw = ImageDraw.Draw(hero)
         draw.text((cx, 392 * scale), temp, font=font(28 * scale), fill=INK, anchor="ms")
     # Glyphs are drawn at 1x geometry on a scaled layer so they stay crisp.
     glyphs = Image.new("RGBA", hero.size)
     gd = ImageDraw.Draw(glyphs)
     for slot, (_, _, glyph) in enumerate(picks):
-        glyph_scaled(gd, glyph, (1070 + 85 + slot * 150) * scale, 135 * scale, scale)
+        glyph_scaled(gd, glyph, hero_center(slot) * scale, 135 * scale, scale)
     hero = Image.alpha_composite(hero, glyphs)
     return hero.resize((1600, 500), Image.Resampling.LANCZOS).convert("RGB")
 
@@ -471,12 +523,13 @@ def check() -> int:
             with Image.open(committed) as old, Image.open(fresh / name) as new:
                 if old.size != new.size:
                     problems.append(f"{name} has the wrong size")
-                # Text rasterization depends on the Pillow wheel, so only pixel art is compared exactly.
-                elif (
-                    name == "examples/mascot.png"
-                    and old.convert("RGBA").tobytes() != new.convert("RGBA").tobytes()
-                ):
-                    problems.append(f"{name} is out of date")
+                # Text rasterization depends on the Pillow wheel: the mascot is compared exactly, the
+                # composite images by their outfit thumbnails only.
+                elif name == "examples/mascot.png":
+                    if old.convert("RGBA").tobytes() != new.convert("RGBA").tobytes():
+                        problems.append(f"{name} is out of date")
+                elif stale_portraits(name, old, new):
+                    problems.append(f"{name} has outdated outfit thumbnails")
     for problem in problems:
         print(problem, file=sys.stderr)
     return 1 if problems else 0

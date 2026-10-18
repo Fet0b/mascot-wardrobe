@@ -23,11 +23,31 @@ the box, including the head, are identical to the source. There is no face detec
 responsible for choosing a box that covers the body and not the face. Adjust it with
 `--body-box` and check the six results.
 
+The example mascot has arm nubs and a head that overlaps its body, so the README quickstart,
+`scripts/e2e-smoke.sh` and the demo images all pass the same explicit box
+`0.125 0.555 0.875 0.915` (from just under the head to the hem, including the arms). The global
+default stays unchanged.
+
+## Fitted templates, not anatomy
+
+The six templates are drawn relative to the box you give: a rounded torso slightly inset from the
+box sides, a half-ellipse neckline centred on the top edge, sleeves in the outer fifth of the box,
+and a hem on the bottom edge. Long sleeves (very cold, cold, mild) cover the arm area down to a
+cuff, the t-shirt covers the upper arm, the sleeveless tee and the camisole leave the arms bare.
+The compositor never looks for a neck, shoulders or arms; they only fit when the box matches
+them, and the silhouette still limits the paint to opaque pixels. The neckline leaves room for a
+head that overlaps the top of the box, but a box that starts lower (the default) simply gets a
+shallower-looking collar.
+
+The renderer exposes `cache_config = {"renderer": "local-composer", "templates": 2}`. It is
+stored in the manifest, so a catalog made by an older template revision is rejected instead of
+silently reused. Change `templates` whenever the pixels of any outfit change.
+
 The palette comes from the country profile. The default compositor uses only its first color
 (garment) and last color (accent) for all six outfits; the other entries are validated and
 recorded in the manifest but not painted. Garment names in a profile are descriptions for a
 possible future provider; the default compositor uses a fixed per-category template (padded
-coat, jacket, sweater, t-shirt, tank top, light strappy piece) and does not interpret the text.
+coat, jacket, cardigan, t-shirt, sleeveless tee, camisole) and does not interpret the text.
 
 Existing transparency is preserved. An opaque background is not removed and the overlay is
 still limited to the body box. See the limitations in the README.

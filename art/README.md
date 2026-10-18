@@ -19,7 +19,10 @@ and PNG always match. The generator needs only Pillow and uses no network.
 .venv/bin/python art/generate_art.py --check  # exit 1 if committed art is stale
 ```
 
-To restyle the mascot, edit the `GROUPS` list in the script. The head and face
-stay above the default body box (0.22, 0.60, 0.78, 0.88) so outfits never touch
-them. `hero.png` and `contact-sheet.png` contain text rendered with the font
-bundled in Pillow, so `--check` compares them by size only.
+To restyle the mascot, edit the `GROUPS` list in the script. The demo images use the explicit
+`EXAMPLE_BODY_BOX` (0.125, 0.555, 0.875, 0.915) from the script; the head and face stay clear of
+every outfit (the compositor neckline follows the lower head), and the default body box
+(0.22, 0.60, 0.78, 0.88) still starts below them. `hero.png` and `contact-sheet.png` contain text
+rendered with the font bundled in Pillow, so `--check` compares only their outfit thumbnails (mean
+pixel difference per thumbnail), which come from the pipeline and catch stale clothes, and ignores
+text pixels.

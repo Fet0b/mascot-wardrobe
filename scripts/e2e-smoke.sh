@@ -83,12 +83,13 @@ step "mascot-wardrobe --help"
 "$cli" --help | head -3
 
 step "generate twice, compare hashes and mtimes"
-"$cli" generate --mascot mascot.png --id sunny --country BR >/dev/null
+box="0.125 0.555 0.875 0.915"  # the example mascot's explicit body box, same as the README quickstart
+"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box >/dev/null
 catalog="mascot-wardrobe-out/catalog"
 manifest="$catalog/manifest.json"
 snapshot "$catalog" >"$run/gen1.txt"
 sleep 1.1
-"$cli" generate --mascot mascot.png --id sunny --country BR >/dev/null
+"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box >/dev/null
 snapshot "$catalog" >"$run/gen2.txt"
 cmp "$run/gen1.txt" "$run/gen2.txt" || fail "second generate changed hashes or mtimes"
 [ "$(ls "$catalog"/*.png "$catalog"/*.jpg | wc -l)" -eq 18 ] || fail "expected 18 outfit images"

@@ -13,7 +13,7 @@
     <ellipse cx="188" cy="470" rx="48" ry="26" fill="#FFF4DC" stroke="#33415C" stroke-width="8"/>
     <ellipse cx="324" cy="470" rx="48" ry="26" fill="#FFF4DC" stroke="#33415C" stroke-width="8"/>
   </g>
-  <!-- Round body. Outfits are drawn over the body box (0.22,0.60)-(0.78,0.88) of the PNG. -->
+  <!-- Round body with arm nubs. Outfits are fitted to the box (0.125,0.555)-(0.875,0.915) of the PNG. -->
   <g id="body">
     <ellipse cx="98" cy="352" rx="28" ry="40" transform="rotate(14 98 352)" fill="#FFF4DC" stroke="#33415C" stroke-width="8"/>
     <ellipse cx="414" cy="352" rx="28" ry="40" transform="rotate(-14 414 352)" fill="#FFF4DC" stroke="#33415C" stroke-width="8"/>

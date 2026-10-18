@@ -65,8 +65,25 @@ def _validate_brief(source: Image.Image, brief: OutfitBrief) -> None:
         raise ValueError("Palette contains an invalid color.") from exc
 
 
+# Template geometry is expressed in fractions (u, v) of the body box, so it scales with any box.
+# The torso is a rounded shape slightly inset from the box sides, so the box can include arm
+# nubs that sleeves cover and sleeveless tops leave bare. The neckline is a half ellipse
+# centred on the top edge: it leaves room for a head that overlaps the box.
+_SUPERSAMPLE = 4
+_TORSO = (0.115, 0.885)
+_TORSO_RADIUS = 0.19  # of the box width, matches a round belly
+_SLEEVE_WIDTH = 0.2
+_NECK = (0.27, 0.15)  # half width (of w) and depth (of h) of the neckline
+
+
 class LocalComposer:
-    """Overlays geometric templates without modifying the source file."""
+    """Overlays fitted geometric templates without modifying the source file.
+
+    The templates fit a body box you provide; they do not detect anatomy.
+    ``cache_config`` is part of the cache binding: bump ``templates`` whenever the pixels change.
+    """
+
+    cache_config = {"renderer": "local-composer", "templates": 2}
 
     def render(self, source: Image.Image, brief: OutfitBrief) -> Image.Image:
         _validate_brief(source, brief)
@@ -78,50 +95,95 @@ class LocalComposer:
             int(v * n) for v, n in zip(brief.body_box, (width, height, width, height), strict=True)
         )
         w, h = x1 - x0, y1 - y0
+        garment, coverage = _garment(index, w, h, primary, accent)
+        # Multiplying by the silhouette prevents painting the transparent background. The piece is
+        # exactly box-sized, so nothing outside the box can change.
+        piece = garment.convert("RGBA")
+        piece.putalpha(ImageChops.multiply(coverage, source.crop((x0, y0, x1, y1)).getchannel("A")))
         layer = Image.new("RGBA", source.size)
-        draw = ImageDraw.Draw(layer)
-
-        def rectangle(box, color):
-            draw.rectangle(box, fill=color)
-
-        if index == 0:  # closed coat, collar and padded seams
-            rectangle((x0, y0, x1 - 1, y1 - 1), primary)
-            for line in range(1, 5):
-                y = y0 + h * line // 5
-                draw.line((x0, y, x1 - 1, y), fill=accent, width=2)
-            rectangle((x0 + w // 3, y0, x0 + 2 * w // 3, y0 + h // 4), accent)
-        elif index == 1:  # open jacket with collar
-            rectangle((x0, y0, x1 - 1, y1 - 1), primary)
-            rectangle((x0 + w * 2 // 5, y0, x0 + w * 3 // 5, y1 - 1), accent)
-            draw.line((x0, y0, x0 + w // 2, y0 + h // 3, x1 - 1, y0), fill=accent, width=3)
-        elif index == 2:  # long-sleeve sweater with a band
-            rectangle((x0, y0 + h // 8, x1 - 1, y1 - 1), primary)
-            rectangle((x0, y0 + h // 2, x1 - 1, y0 + h * 2 // 3), accent)
-        elif index == 3:  # short-sleeve t-shirt
-            draw.polygon(
-                [
-                    (x0, y0),
-                    (x1 - 1, y0),
-                    (x1 - 1, y0 + h // 3),
-                    (x0 + w * 4 // 5, y0 + h // 3),
-                    (x0 + w * 4 // 5, y1 - 1),
-                    (x0 + w // 5, y1 - 1),
-                    (x0 + w // 5, y0 + h // 3),
-                    (x0, y0 + h // 3),
-                ],
-                fill=primary,
-            )
-            rectangle((x0 + w // 3, y0 + h // 3, x0 + w // 2, y0 + h // 2), accent)
-        elif index == 4:  # tank top
-            rectangle((x0 + w // 4, y0, x0 + 3 * w // 4, y1 - 1), primary)
-            rectangle((x0 + w // 3, y0, x0 + 2 * w // 3, y0 + h // 4), accent)
-        else:  # light piece with narrow straps
-            rectangle((x0 + w // 4, y0 + h // 2, x0 + 3 * w // 4, y1 - 1), accent)
-            for x in (x0 + w // 4, x0 + 3 * w // 4 - max(1, w // 12)):
-                rectangle((x, y0, x + max(1, w // 12), y0 + h // 2), primary)
-        # Multiplying by the silhouette prevents painting the transparent background.
-        body_mask = Image.new("L", source.size)
-        ImageDraw.Draw(body_mask).rectangle((x0, y0, x1 - 1, y1 - 1), fill=255)
-        alpha = ImageChops.multiply(layer.getchannel("A"), source.getchannel("A"))
-        layer.putalpha(ImageChops.multiply(alpha, body_mask))
+        layer.paste(piece, (x0, y0))
         return Image.alpha_composite(source, layer)
+
+
+def _garment(index, w, h, primary, accent):
+    """Draw one template at 4x and return its (w x h RGB colors, w x h L coverage)."""
+    s = _SUPERSAMPLE
+    colors = Image.new("RGB", (w * s, h * s), primary)
+    cover = Image.new("L", colors.size)
+    paint, shape = ImageDraw.Draw(colors), ImageDraw.Draw(cover)
+
+    def box(u0, v0, u1, v1):
+        return (u0 * w * s, v0 * h * s, u1 * w * s - 1, v1 * h * s - 1)
+
+    def mirrored(u0, v0, u1, v1):
+        return (box(u0, v0, u1, v1), box(1 - u1, v0, 1 - u0, v1))
+
+    def torso():
+        shape.rounded_rectangle(box(_TORSO[0], 0, _TORSO[1], 1), radius=_TORSO_RADIUS * w * s, fill=255)
+
+    def sleeves(end):
+        for rect in mirrored(0, 0.04, _SLEEVE_WIDTH, end):
+            shape.rounded_rectangle(rect, radius=0.05 * w * s, fill=255)
+
+    def cuffs(end, depth=0.09):
+        for rect in mirrored(0, end - depth, _TORSO[0], end):  # only the part outside the torso
+            paint.rectangle(rect, fill=accent)
+
+    def neckline(trim=0.0, scale=1.0):
+        rx, ry = _NECK[0] * scale, _NECK[1] * scale
+        if trim:  # a band hugging the neckline
+            band = box(0.5 - rx - trim, -ry - trim * w / h, 0.5 + rx + trim, ry + trim * w / h)
+            paint.ellipse(band, fill=accent)
+        shape.ellipse(box(0.5 - rx, -ry, 0.5 + rx, ry), fill=0)
+        if trim:
+            paint.ellipse(box(0.5 - rx, -ry, 0.5 + rx, ry), fill=primary)
+
+    def armholes(depth, reach):
+        for rect in mirrored(0.115 - reach, 0.25 - depth, 0.115 + reach, 0.25 + depth):
+            shape.ellipse(rect, fill=0)
+
+    def band(v0, v1, color=accent):
+        paint.rectangle(box(_TORSO[0], v0, _TORSO[1], v1), fill=color)
+
+    def line(u0, v0, u1, v1, width, color=accent):
+        paint.line((u0 * w * s, v0 * h * s, u1 * w * s, v1 * h * s), fill=color, width=round(width * s))
+
+    torso()
+    if index == 0:  # padded coat: long sleeves, quilting seams, high collar
+        sleeves(0.5)
+        for v in (0.3, 0.5, 0.7):
+            line(_TORSO[0], v, _TORSO[1], v, 2)
+        cuffs(0.5)
+        neckline(trim=0.022)
+    elif index == 1:  # closed jacket: long sleeves, zipper, collar
+        sleeves(0.5)
+        line(0.5, 0.12, 0.5, 1, 3)
+        band(0.9, 1)
+        cuffs(0.5)
+        neckline(trim=0.016)
+    elif index == 2:  # light cardigan: long sleeves, buttons, ribbed hem
+        sleeves(0.5)
+        band(0.88, 1)
+        cuffs(0.5, 0.06)
+        for v in (0.3, 0.5, 0.7):
+            paint.ellipse(box(0.49, v - 0.02, 0.51, v + 0.02), fill=accent)
+        neckline(trim=0.008)
+    elif index == 3:  # t-shirt: short sleeves, crew collar
+        sleeves(0.32)
+        cuffs(0.32, 0.07)
+        neckline(trim=0.012)
+    elif index == 4:  # sleeveless tee: armholes, collar
+        armholes(0.2, 0.1)
+        neckline(trim=0.012)
+        band(0.92, 1)
+    else:  # camisole: deep scoop, big armholes, light accent body
+        paint.rectangle((0, 0, w * s, h * s), fill=accent)
+        armholes(0.22, 0.11)
+        shape.ellipse(box(0.25, -0.24, 0.75, 0.24), fill=0)
+        for rect in mirrored(0.22, 0, 0.29, 0.2):  # thin straps over the shoulders
+            shape.rectangle(rect, fill=255)
+            paint.rectangle(rect, fill=primary)
+        neckline()
+        band(0.92, 1, primary)
+    size = (w, h)
+    return colors.resize(size, Image.Resampling.BOX), cover.resize(size, Image.Resampling.BOX)
