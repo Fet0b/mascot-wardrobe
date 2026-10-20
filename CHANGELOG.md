@@ -5,6 +5,16 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `mascot-wardrobe publish`: selects one outfit and delivers the same square JPEG to opt-in live
+  adapters (Hermes WhatsApp bridge on loopback; Telegram bot profile via `setMyProfilePhoto`),
+  exposing the atlas path. Dry-run by default, `--apply` required. Bounded, redirect-denying,
+  redacted clients; Telegram reported as acknowledged, never verified. Uninstalled scheduler
+  examples in `examples/publish/`. ADR 0003 amended; the sandbox channel is unchanged.
+- `docs/integration.md`: clean install, verification, dry-run versus `--apply`, channel
+  prerequisites, rollback, and the boundary with a separately installed Hermes scheduler.
+
 ### Fixed
 
 - Clothing alignment: the templates were plain rectangles over a body box narrower and shorter than

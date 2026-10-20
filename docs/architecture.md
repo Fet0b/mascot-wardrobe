@@ -1,9 +1,10 @@
 # Architecture
 
 mascot-wardrobe prepares six outfits for a mascot once, then selects one by temperature. It is
-a small library plus a CLI. It installs no services, changes no real accounts and makes no
-external requests except the opt-in Open-Meteo weather request. The sandbox bridge uses
-loopback only.
+a small library plus a CLI. It installs no services. By default it changes no real accounts and
+makes no external requests except the opt-in Open-Meteo weather request; the sandbox bridge uses
+loopback only. The opt-in `publish --apply` path can change a WhatsApp profile through a local
+bridge or a Telegram bot profile (see ADR 0003).
 
 ## Domain language
 
@@ -14,8 +15,8 @@ loopback only.
   intentional sixth category.
 - **Wardrobe**: the six outfits, generated once and recorded in `manifest.json`.
 - **Selection**: choosing an existing outfit by temperature. It reads the manifest only.
-- **Channel**: a destination for a selected outfit. All channels are export-only (files, or a
-  loopback test bridge); none is a real account.
+- **Channel**: a destination for a selected outfit. Sandbox channels are export-only (files, or a
+  loopback test bridge). Live adapters are separate and opt-in.
 
 ## Structure and dependencies
 
@@ -26,12 +27,13 @@ inversion.
 | Package | Responsibility |
 | --- | --- |
 | `mascot_wardrobe.domain` | Pure values and rules: `Category`, `CountryProfile`, `Mascot`, `validate_temperature`, `to_celsius`. No I/O, no Pillow, no network. |
-| `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, and the `safe_output` path guard. |
+| `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, `publish_outfit` (dry-run unless applied) and the `safe_output` path guard. |
 | `mascot_wardrobe.wardrobe` | `WardrobeAgent` (generation, manifest, idempotent reuse, atlas and JPEG assets). |
 | `mascot_wardrobe.wardrobe.composer` | Pillow compositor: `LocalComposer`, `OutfitBrief`, the `Renderer` protocol, `CATEGORIES`, `_validate_brief`. |
 | `mascot_wardrobe.channels` | Supporting adapters: `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
+| `mascot_wardrobe.channels.live` (`channels/live.py`) | Opt-in live adapters: `HermesWhatsAppProfileAdapter`, `TelegramBotProfileAdapter`, `telegram_transport`, `publish_to_catalog`. Never used by the sandbox commands. |
 | `mascot_wardrobe.infrastructure` | Supporting adapters: `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
-| `mascot_wardrobe.interfaces.cli` | `generate`, `select`, `sandbox`, `demo` commands. |
+| `mascot_wardrobe.interfaces.cli` | `generate`, `select`, `sandbox`, `demo` and `publish` commands. |
 
 The actual import graph: the CLI (interfaces) calls the application layer, and imports
 `infrastructure.weather` itself for the live weather option. The application imports the concrete

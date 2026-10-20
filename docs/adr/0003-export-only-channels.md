@@ -1,30 +1,45 @@
-# ADR 0003: Export-only channels
+# ADR 0003: Export-only channels, amended for opt-in live adapters
 
-Status: accepted
+Status: amended (originally accepted as export-only)
 
 ## Context
 
 Delivering an outfit to a messaging account needs credentials, authorization of the target and
-read-back verification, and an automated tool that changes real accounts is risky.
+read-back verification, and an automated tool that changes real accounts is risky. The original
+decision excluded real publishing entirely. The owner now wants one selected outfit presented as
+a Hermes pet atlas plus a square profile JPEG for their own WhatsApp (local Hermes/Baileys
+bridge) and for a Telegram bot, on a schedule.
 
 ## Decision
 
-Channels (`whatsapp`, `telegram`, `discord`, `hermes-cli`) copy files into
-`<export-dir>/<channel>/<slug>/` and report `remote_sync: false`. Repeats with identical bytes
-report `unchanged`.
+Sandbox channel is preserved unchanged. Channels (`whatsapp`, `telegram`, `discord`,
+`hermes-cli`) copy files into `<export-dir>/<channel>/<slug>/` and report `remote_sync: false`.
+The loopback `SandboxBridge` with `WhatsAppBridgeChannel` stays a contract test: loopback only,
+neutral header `X-Mascot-Wardrobe-Sandbox`, port 3000 refused, `sandbox: true`.
 
-A loopback HTTP sandbox bridge (`SandboxBridge` with `WhatsAppBridgeChannel`) is retained as
-a contract test of an update and read-back flow. It binds `127.0.0.1` only, uses the neutral
-header `X-Mascot-Wardrobe-Sandbox` and is documented as local, not a WhatsApp integration. The
-CLI keeps routing `--channel whatsapp` to this bridge; file export for that channel name is a
-library path covered by the `FileExportChannel` tests.
+Amended by this ADR: live adapters (`mascot_wardrobe.channels.live`) are added behind a new
+`publish` command with these safeguards:
 
-No real account is changed and no credentials are read. Changing a Telegram bot's avatar is
-not available in this project: the project does not call that, or any other, platform API. This
-is a scope decision, not a statement about what any platform allows.
+- **Dry-run is the default.** Only `--apply` changes anything, and applying with no configured
+  channel is refused. `generate` never publishes.
+- **Narrow scope.** WhatsApp only through the Hermes bridge on loopback (the adapter runs on the
+  Hermes host; non-loopback destinations are refused), updating the connected account itself
+  with a slug only. Telegram only for the bot's own profile photo via `setMyProfilePhoto`.
+- **Authorization.** A bridge directory and URL, and for Telegram a bot id, must be configured
+  explicitly; there are no defaults pointing at live resources.
+- **Secrets.** Tokens come from the environment or an injected provider, are never stored,
+  logged or printed, and request URLs are never shown.
+- **Honest verification.** WhatsApp is `verified` only after a matching readback of
+  `target: self`; Telegram is reported as `acknowledged`, `verified: false`.
+- **Bounds.** Timeouts, bounded responses, redirects and proxies denied, atomic state writes,
+  idempotent repeats, redacted failures.
+- **No inference.** No LLM, image API or paid service: the wardrobe stays local Pillow.
+  Weather remains the opt-in free Open-Meteo request.
 
 ## Consequences
 
-- Safe by default and simple to test offline.
-- Real publishing remains future work needing explicit authorization, secrets handling outside
-  the repository, a provider adapter and a read-back check.
+- Safe by default and simple to test offline; live paths are covered with fakes only.
+- A real run can change a real account photo; rollback is manual (see `docs/channels.md`).
+- The WhatsApp readback field names are an assumption modeled on the sandbox contract and must
+  be checked against the real bridge by its owner.
+- Scheduling stays an uninstalled example (`examples/publish/`).

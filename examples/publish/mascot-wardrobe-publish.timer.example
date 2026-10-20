@@ -1,0 +1,12 @@
+# Example only. Never installed by mascot-wardrobe.
+# A systemd user timer that fires every 6 hours. It does nothing until you copy it, adapt it and
+# enable it yourself; undo with: systemctl --user disable --now mascot-wardrobe-publish.timer
+[Unit]
+Description=Publish the mascot-wardrobe outfit every 6 hours (example)
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

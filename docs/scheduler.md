@@ -20,3 +20,22 @@ yourself if you want Open-Meteo, accepting that failures exit with status 2 and 
 previous export untouched.
 
 Replace every `/path/to/...` placeholder before use. Do not run a scheduler as a privileged user.
+
+## Periodic publishing (opt-in, never installed)
+
+`examples/publish/` holds a second pair of templates, `mascot-wardrobe-publish.service.example`
+and `mascot-wardrobe-publish.timer.example`. They run `mascot-wardrobe publish ... --apply`
+every 6 hours, which selects one outfit and delivers the same JPEG to the channels you
+configured (see [channels](channels.md)). Like the others they carry the `.example` suffix, are
+never installed, and nothing in this repository enables or starts them.
+
+- No LLM, agent or image API is involved: selection is a manifest lookup and the images were
+  composed locally by Pillow. Weather is requested only because the template spells out
+  `--live-weather` with coordinates; replace it with `--temperature` to stay fully offline.
+- Credentials come from an `EnvironmentFile` that you keep outside the repository. Never
+  put a token in the unit file.
+- Run it on the Hermes host so the loopback bridge is reachable. Do not run it as a privileged user.
+- Test first: remove `--apply` for a dry-run that only prints what would happen.
+- Disable and roll back: `systemctl --user disable --now mascot-wardrobe-publish.timer`, remove
+  the copied unit files, and delete the bot token from your environment file. A cron line works
+  the same way: any scheduler only needs to run the same `publish` command.

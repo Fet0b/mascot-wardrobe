@@ -1,15 +1,19 @@
 # Channels
 
-Channels are export-only. Nothing in this project changes a real WhatsApp, Telegram, Discord
-or other account, and no credentials are required or read.
+The sandbox channels are export-only. `generate`, `select`, `sandbox` and `demo` never change a
+real WhatsApp, Telegram, Discord or other account and need no credentials. Real profile changes
+exist only in the separate, explicitly opt-in `publish` command (see
+[Live adapters](#live-adapters-opt-in)), which is a dry-run unless you pass `--apply`.
 
-Two kinds of destination exist:
+Three kinds of destination exist:
 
 - **File export** (`FileExportChannel`): copies files into a folder. Used for `telegram`,
   `discord`, `hermes-cli` and, as a library class, for `whatsapp`.
 - **Loopback sandbox bridge** (`SandboxBridge` plus `WhatsAppBridgeChannel`): a local HTTP
   server on `127.0.0.1` that exercises an update-and-read-back contract against files. It is a
   local contract test, not a WhatsApp integration.
+- **Live adapters** (`mascot_wardrobe.channels.live`): the Hermes WhatsApp bridge client and the
+  Telegram bot client. They never masquerade as sandbox channels (`sandbox: false`).
 
 ## CLI routing
 
@@ -28,11 +32,82 @@ covered by its unit test); the CLI keeps routing `--channel whatsapp` to the bri
 A sandbox export or a bridge run proves that bytes were copied to a local folder or file. It
 does not prove that anything was published, and a real service may recompress images.
 
-Changing the avatar of a Telegram bot is not available in this project. The project never calls
-any Telegram API and never claims to; that follows from the export-only decision (ADR 0003), not
-from a statement about what any platform offers. The same holds for every other service. A
-real integration would need explicit target authorization, credentials kept outside the
-repository, a provider adapter and a read-back check, and is out of scope.
+Changing a real account through the sandbox or file-export channels is not available in this project:
+they only copy files and talk to a local fixture. Real changes need the live adapters
+below and a deliberate `--apply` (ADR 0003, amended).
+
+## Live adapters (opt-in)
+
+Scope is deliberately narrow: **WhatsApp through the local Hermes/Baileys bridge** and **a
+Telegram bot's own profile photo**. Nothing else (Discord, other bridges, personal Telegram
+accounts) is supported.
+
+```sh
+# Dry-run (default): selects the outfit, validates the JPEG and the settings, prints the plan
+# plus the atlas path for the Hermes pet. No network, no writes.
+mascot-wardrobe publish --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
+  --temperature 22 --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header "Name: value" \
+  --telegram --telegram-expected-bot-id 123456789
+
+# The same command with --apply really changes the profile photos.
+```
+
+Selection happens once; the same `<slug>.jpg` (512x512 square JPEG) goes to every configured
+channel, and the result lists `atlas` (the `<slug>-atlas.png` for the Hermes pet) so all outputs
+show the same outfit. With `--apply` and no configured channel the command refuses (exit 2).
+Exit status is 0 when every configured channel succeeded, 1 when one failed (the other is still
+attempted and reported), 2 for invalid configuration.
+
+### WhatsApp via the Hermes bridge
+
+- The bridge listens on `127.0.0.1` only, so this adapter must run on the Hermes host, or against
+  a loopback endpoint you opened yourself. It refuses any other destination: the URL must be
+  plain HTTP, a literal loopback IP, with an explicit port, no credentials, path, query or
+  fragment. Proxies and redirects are disabled. It never calls `/health`.
+- The bridge only reads prebuilt `<slug>.jpg` files from its own approved photo directory. Point
+  `--whatsapp-catalog-dir` at that directory explicitly; there is no default and the project
+  never points at a live directory by itself. The slug is validated, symbolic links are
+  refused, and the file is copied atomically (identical bytes are not rewritten).
+- The request carries only `{"slug": ...}`. No JID, path, URL or image bytes are sent, and no
+  `Origin` header. The header your bridge requires is passed as `--whatsapp-bridge-header
+  "Name: value"` or the `MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER` environment variable; it is a
+  contract value of your bridge, not stored in this repository.
+- Flow: `GET /profile-picture?slug=...` readback; if it already matches, report `unchanged`;
+  otherwise `POST`, require `success` and `target: self`, then read back again. `verified: true`
+  is reported only when the follow-up readback says `target: self` and `matches: true` with a
+  consistent image and hash. An acknowledgement without a matching readback is an error.
+- Limit: the readback field names (`target`, `slug`, `matches`, `imageBase64`, `remoteSha256`) mirror
+  the sandbox contract. They are tested only against fakes; check them against your bridge
+  before relying on `--apply`.
+
+### Telegram bot
+
+- Uses the free official Bot API method `setMyProfilePhoto` with a static `.jpg`
+  (`InputProfilePhotoStatic`, multipart `attach://`). It changes the profile photo of **the bot itself**,
+  never the photo of a personal Telegram account, and needs a Bot API version that
+  provides the method.
+- Credentials: only from the environment (`MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN` by default, or
+  the name given by `--telegram-token-env`). The token is never stored, logged or printed, and
+  the request URL (which contains it) is never shown; failures report only the method and the
+  HTTP status.
+- Identity: `--telegram-expected-bot-id` is required; `getMe` must report a bot with that id
+  before any photo changes.
+- Verification: no reliable readback is used, so the result is `acknowledged: true`,
+  `verified: false`, `verification: "unverified-ack-only"`. Telegram is never reported as verified. The acknowledgement must be exactly `true`.
+- Idempotency: the SHA-256 of the last acknowledged JPEG is kept in
+  `<telegram-state-dir>/telegram-profile.json` (atomic write, symbolic links refused); the same
+  image is not sent again unless `--force`.
+- Limit: not exercised against the real service in this repository; tests use a fake transport
+  and a loopback fake server. Timeout 10 s, responses bounded to 1 MiB, redirects denied.
+
+### Disable and rollback
+
+Live behavior needs `--apply` and a configured channel, so removing `--apply` or the channel
+flags (or the scheduler entry, see [scheduler](scheduler.md)) stops it. There is no automatic
+undo: to roll back, run `publish --apply` again with a different temperature or restore the old
+photo through the same bridge or through BotFather. Delete the bot token from your environment
+when you stop using the adapter.
 
 ## File exports
 
@@ -86,6 +161,10 @@ with SandboxBridge(Path("catalog"), Path("state")) as bridge:
   and the SHA-256 of the read-back bytes. This verifies the simulated copy only.
 
 ## Security limits
+
+The live adapters add real network paths: the Telegram client may reach only
+`https://api.telegram.org`, and the bridge client only a loopback address. Tests never contact
+either; they use fake credentials, fake transports and fake loopback servers.
 
 The sandbox is a logical boundary in the application, not operating system isolation. A
 privileged process could swap directories or impersonate the bridge, and the `sandbox: true`

@@ -1,0 +1,25 @@
+# Example only. Never installed by mascot-wardrobe.
+# A systemd user service that selects ONE outfit and delivers the same JPEG to the channels you
+# configure. Pair it with the timer example. No LLM or image API is involved; weather is the free
+# Open-Meteo endpoint, requested only because --live-weather is spelled out below.
+#
+# Credentials live outside the repository: the EnvironmentFile (mode 0600, yours) holds
+#   MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN=<your bot token>
+#   MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER=<Name: value required by your bridge>
+# Run this on the machine that hosts the bridge: the bridge listens on loopback only.
+# Remove --apply to get a dry-run that changes nothing. Drop a channel's flags to disable it.
+[Unit]
+Description=Publish the current mascot-wardrobe outfit (example)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/workdir
+EnvironmentFile=/path/to/private/mascot-wardrobe.env
+ExecStart=/path/to/venv/bin/mascot-wardrobe publish \
+  --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
+  --live-weather --latitude 0.0 --longitude 0.0 \
+  --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-bridge-url http://127.0.0.1:3000 \
+  --telegram --telegram-expected-bot-id 123456789 \
+  --telegram-state-dir /path/to/workdir/state \
+  --apply

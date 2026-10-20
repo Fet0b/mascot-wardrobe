@@ -1,7 +1,9 @@
 """Application use cases: prepare once, select often, synchronize only sandbox."""
 
+import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from mascot_wardrobe.domain.models import Category, Mascot, to_celsius
@@ -79,3 +81,89 @@ def select_outfit(manifest, country, temperature, unit="C", *, profiles=None):
             raise ValueError("Missing or unsafe outfit asset")
         result[key] = str(path)
     return result
+
+
+@dataclass(frozen=True)
+class WhatsAppTarget:
+    """Approved local photo directory read by the bridge, plus the adapter that talks to it."""
+
+    catalog_dir: Path
+    adapter: object
+
+
+@dataclass(frozen=True)
+class TelegramTarget:
+    """Bot profile adapter plus a state directory holding the hash of the last acknowledged image."""
+
+    adapter: object
+    state_dir: Path
+
+
+def _publish_whatsapp(target, selection):
+    from mascot_wardrobe.channels.live import publish_to_catalog
+
+    publish_to_catalog(selection["slug"], Path(selection["jpg"]), target.catalog_dir)
+    return {"status": "applied", **target.adapter.sync(selection["slug"])}
+
+
+def _read_telegram_state(path):
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("Unsafe Telegram state file")
+    if not path.exists() or path.stat().st_size >= 4096:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    return data.get("sha256") if isinstance(data, dict) else None
+
+
+def _publish_telegram(target, selection, digest, force):
+    from mascot_wardrobe.channels import _atomic
+
+    directory = safe_output(target.state_dir)
+    state = directory / "telegram-profile.json"
+    if directory.exists() and not directory.is_dir():
+        raise ValueError("Telegram state directory is not a directory")
+    if not force and _read_telegram_state(state) == digest:
+        return {"status": "unchanged", "acknowledged": True, "verified": False}
+    result = target.adapter.apply(Path(selection["jpg"]))
+    directory.mkdir(parents=True, exist_ok=True)
+    if state.is_symlink() or state.resolve().parent != directory:
+        raise ValueError("Unsafe Telegram state file")
+    _atomic(state, json.dumps({"sha256": digest, "verified": False}).encode())
+    return {"status": "applied", **result}
+
+
+def publish_outfit(selection, *, apply=False, force=False, whatsapp=None, telegram=None):
+    """Deliver one already-selected outfit to the configured live channels; dry-run unless ``apply``."""
+    from mascot_wardrobe.channels.live import validate_profile_jpeg
+
+    if apply and whatsapp is None and telegram is None:
+        raise ValueError("Applying requires at least one configured channel")
+    data = validate_profile_jpeg(Path(selection["jpg"]).read_bytes())
+    digest = hashlib.sha256(data).hexdigest()
+    channels = {}
+    for name, target in (("whatsapp", whatsapp), ("telegram", telegram)):
+        if target is None:
+            continue
+        if not apply:
+            channels[name] = {"status": "planned"}
+            continue
+        try:
+            if name == "whatsapp":
+                channels[name] = _publish_whatsapp(target, selection)
+            else:
+                channels[name] = _publish_telegram(target, selection, digest, force)
+        except (ValueError, OSError, RuntimeError) as error:
+            channels[name] = {"status": "failed", "error": str(error)}
+    return {
+        "mode": "apply" if apply else "dry-run",
+        "slug": selection["slug"],
+        "category": selection["category"],
+        "jpg": selection["jpg"],
+        "atlas": selection["atlas"],
+        "jpg_sha256": digest,
+        "channels": channels,
+        "ok": all(item["status"] != "failed" for item in channels.values()),
+    }

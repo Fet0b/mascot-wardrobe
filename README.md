@@ -62,6 +62,27 @@ Use `--body-box X1 Y1 X2 Y2` (normalized, default `0.22 0.60 0.78 0.88`) to tell
 where your mascot's body is: the templates are fitted to that box (sleeves, hem, neckline), they
 do not detect anatomy. See [docs/wardrobe.md](docs/wardrobe.md).
 
+## Publishing a profile photo (opt-in)
+
+`mascot-wardrobe publish` selects one outfit and delivers the same square JPEG to the channels
+you configure, and prints the matching atlas path for the Hermes pet. It is a **dry-run by
+default**; nothing changes until you add `--apply` and a configured channel.
+
+```sh
+mascot-wardrobe publish --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
+  --temperature 22 --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header "Name: value" \
+  --telegram --telegram-expected-bot-id 123456789          # dry-run
+```
+
+Supported scope only: WhatsApp through the local Hermes/Baileys bridge (run it on the Hermes
+host; loopback only) and the Telegram **bot itself** (not a personal account). The Telegram
+token comes from the `MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN` environment variable; Telegram results
+are acknowledged but unverified. It needs no LLM or image API. See [docs/channels.md](docs/channels.md)
+the uninstalled [scheduler examples](docs/scheduler.md) and the
+[installation and integration guide](docs/integration.md), which also states that a separately
+installed Hermes weather scheduler is not wired to this project.
+
 ## Offline deterministic demo
 
 Everything above is offline. `scripts/e2e-smoke.sh` runs the whole flow against a freshly built
@@ -95,10 +116,11 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 
 ## Documentation
 
+- [Installation and integration guide](docs/integration.md)
 - [Architecture](docs/architecture.md) and the [ADRs](docs/adr/)
 - [Configuration, weather and time semantics](docs/configuration.md)
 - [Wardrobe compositor and atlas layout](docs/wardrobe.md)
-- [Channels (sandbox exports, not real accounts)](docs/channels.md)
+- [Channels (sandbox exports and opt-in live adapters)](docs/channels.md)
 - [Scheduler examples (not installed)](docs/scheduler.md)
 - [Traceability](docs/traceability.md) and [verification](docs/verification.md)
 
@@ -112,19 +134,22 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
   Overlays are painted inside the body box only.
 - Country presets are product defaults, not meteorological or health standards, and one country
   can have many climates.
-- Channels are export-only. The sandbox is a file and loopback test fixture, not a real account.
-  This project does not change any real account, and Telegram bot avatar changes are not
-  available in this project.
+- Sandbox channels are export-only: a file and loopback test fixture, not a real account.
+  Real profile changes happen only through `publish --apply`, limited to the Hermes WhatsApp
+  bridge and a Telegram bot; Telegram is never verified, only acknowledged.
 - Atlas animation is a geometric translation of the portrait, not an articulated animation.
 
 ## Security
 
-- No credentials or tokens are needed or read. There are no runtime model calls.
+- Sandbox use needs no credentials. `publish --apply` with Telegram reads a bot token from the
+  environment only and never stores or prints it. There are no runtime model calls.
 - Output paths reject `..` and symbolic links; file names and slugs are validated and input
   PNG size is bounded.
 - The optional HTTP sandbox bridge binds to loopback only and is a local contract test.
-- The only external request is the opt-in `--live-weather` call to Open-Meteo. Separately, the
-  sandbox bridge and its client talk to each other over loopback HTTP on your own machine.
+- The only external request by default is the opt-in `--live-weather` call to Open-Meteo.
+  Separately, the sandbox bridge and its client talk over loopback HTTP on your own machine.
+  `publish --apply` additionally talks to your loopback Hermes bridge and, if enabled, to
+  `api.telegram.org`.
 - Nothing is installed as a service; scheduler files are `.example` templates only.
 
 See [SECURITY.md](SECURITY.md) for reporting and scope, and [CONTRIBUTING.md](CONTRIBUTING.md)

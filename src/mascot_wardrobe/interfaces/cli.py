@@ -2,12 +2,16 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from mascot_wardrobe.application import (
+    TelegramTarget,
+    WhatsAppTarget,
     export_outfit,
     prepare_wardrobe,
+    publish_outfit,
     select_outfit,
     sync_sandbox,
 )
@@ -41,7 +45,60 @@ def parser():
         sandbox.add_argument(
             "--channel", choices=("whatsapp", "telegram", "discord", "hermes-cli"), default="whatsapp"
         )
+    publish = commands.add_parser(
+        "publish",
+        help="Select one outfit and deliver its JPEG to opt-in live channels (dry-run unless --apply)",
+    )
+    _selection_arguments(publish)
+    publish.add_argument(
+        "--apply", action="store_true", help="Really change profile photos; default is a dry-run"
+    )
+    publish.add_argument(
+        "--force", action="store_true", help="Re-send to Telegram even if the image is unchanged"
+    )
+    publish.add_argument(
+        "--whatsapp-catalog-dir", type=Path, help="Approved photo directory read by the bridge"
+    )
+    publish.add_argument("--whatsapp-bridge-url", help="Loopback bridge URL, e.g. http://127.0.0.1:3000")
+    publish.add_argument(
+        "--whatsapp-bridge-header",
+        default=os.environ.get("MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER"),
+        help="'Name: value' header the bridge requires (or env MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER)",
+    )
+    publish.add_argument(
+        "--telegram", action="store_true", help="Update the Telegram BOT's own profile photo"
+    )
+    publish.add_argument("--telegram-expected-bot-id", type=int, help="Numeric bot id verified with getMe")
+    publish.add_argument("--telegram-token-env", default="MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN")
+    publish.add_argument("--telegram-state-dir", type=Path, default=DEFAULT_OUT / "state")
     return root
+
+
+def _publish_targets(args):
+    from mascot_wardrobe.channels.live import (
+        HermesWhatsAppProfileAdapter,
+        TelegramBotProfileAdapter,
+        environment_token_provider,
+    )
+
+    whatsapp = telegram = None
+    settings = (args.whatsapp_catalog_dir, args.whatsapp_bridge_url, args.whatsapp_bridge_header)
+    if any(settings):
+        if not all(settings):
+            raise ValueError(
+                "whatsapp needs --whatsapp-catalog-dir, --whatsapp-bridge-url and --whatsapp-bridge-header"
+            )
+        adapter = HermesWhatsAppProfileAdapter(
+            args.whatsapp_bridge_url, bridge_header=args.whatsapp_bridge_header
+        )
+        whatsapp = WhatsAppTarget(args.whatsapp_catalog_dir, adapter)
+    if args.telegram:
+        if args.telegram_expected_bot_id is None:
+            raise ValueError("--telegram requires --telegram-expected-bot-id")
+        provider = environment_token_provider(args.telegram_token_env)
+        adapter = TelegramBotProfileAdapter(provider, expected_bot_id=args.telegram_expected_bot_id)
+        telegram = TelegramTarget(adapter, args.telegram_state_dir)
+    return whatsapp, telegram
 
 
 def _selection_arguments(command):
@@ -106,6 +163,14 @@ def main(argv=None):
             result = select_outfit(args.manifest, args.country, temperature, unit, profiles=args.profiles)
             weather["temperature_c"] = result["temperature_c"]
             result["weather"] = weather
+            if args.command == "publish":
+                whatsapp, telegram = _publish_targets(args)
+                result = publish_outfit(
+                    result, apply=args.apply, force=args.force, whatsapp=whatsapp, telegram=telegram
+                )
+                result["weather"] = weather
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0 if result["ok"] else 1
             if args.command in ("sandbox", "demo"):
                 selection = result
                 if args.channel == "whatsapp":
