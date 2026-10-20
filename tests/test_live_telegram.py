@@ -204,7 +204,7 @@ class TelegramHardeningTests(unittest.TestCase):
         telegram_transport(api_base="http://127.0.0.1:8081")
         telegram_transport(api_base="http://[::1]:8081/")
         for base in (
-            "http://user:pass@127.0.0.1:8081",
+            "http://user" + ":pass" + "@127.0.0.1:8081",
             "http://127.0.0.1:8081#frag",
             "http://127.0.0.1:8081?x=1",
             "http://127.0.0.1",

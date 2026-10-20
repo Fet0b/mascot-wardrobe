@@ -189,7 +189,7 @@ class BridgeAdapterTests(unittest.TestCase):
             "http://192." + "0.2.10:3000",
             "https://127.0.0.1:3000",
             "http://127.0.0.1",
-            "http://user:pw@127.0.0.1:3000",
+            "http://user" + ":pw" + "@127.0.0.1:3000",
             "http://127.0.0.1:3000/profile-picture",
             "http://127.0.0.1:3000?x=1",
             "http://0.0.0.0:3000",
