@@ -8,6 +8,30 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_BOX = (0.22, 0.60, 0.78, 0.88)
+EXAMPLE_BODY_BOX = (0.125, 0.555, 0.875, 0.915)  # same value as art/generate_art.py
+SYNTHETIC_BOX = (0.0, 0.28, 1.0, 0.92)  # overlaps the head of the synthetic mascot
+
+
+def head_over_body_image(centre=120, nubs=True):
+    """Synthetic mascot: a head ellipse overlapping a body ellipse (narrow neck), optional arm nubs."""
+    image = Image.new("RGBA", (240, 250), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    fill = (130, 180, 210, 255)
+    draw.ellipse((centre - 65, 100, centre + 65, 230), fill=fill)
+    draw.ellipse((centre - 45, 10, centre + 45, 110), fill=fill)
+    if nubs:
+        draw.ellipse((centre - 78, 135, centre - 52, 175), fill=fill)
+        draw.ellipse((centre + 52, 135, centre + 78, 175), fill=fill)
+    return image
+
+
+def crop_to_box(image, box):
+    width, height = image.size
+    pixels = tuple(int(v * n) for v, n in zip(box, (width, height, width, height), strict=True))
+    return image.crop(pixels)
+
 
 def source_image():
     image = Image.new("RGBA", (160, 200), (0, 0, 0, 0))
@@ -444,3 +468,110 @@ class AgentTests(unittest.TestCase):
                 agent.generate(mascot, profile, output)
             self.assertEqual(external.read_bytes(), original)
             self.assertEqual(renderer.calls, 6)
+
+
+class MeasureFitTests(unittest.TestCase):
+    def measure(self, image, box, region=None):
+        from mascot_wardrobe.wardrobe.fit import measure_fit
+
+        alpha = crop_to_box(image, box).getchannel("A")
+        return measure_fit(alpha, None if region is None else crop_to_box(region, box).getchannel("A"))
+
+    def example(self):
+        return Image.open(ROOT / "examples" / "mascot.png").convert("RGBA")
+
+    def example_mask(self):
+        example = self.example()
+        mask = Image.new("RGBA", example.size, (0, 0, 0, 0))
+        mask.putalpha(example.getchannel("A"))
+        return mask
+
+    def test_head_over_body_fixture_starts_the_garment_at_the_neck(self):
+        fit = self.measure(head_over_body_image(), SYNTHETIC_BOX)
+        self.assertEqual(fit.top_row, 0)
+        self.assertTrue(30 <= fit.neck_row <= 36, fit.neck_row)  # narrowest row, box row 33
+        self.assertTrue(94 <= fit.neck_left <= 100 and 140 <= fit.neck_right <= 146)
+        self.assertTrue(56 <= fit.shoulder_row <= 62, fit.shoulder_row)
+        self.assertTrue(157 <= fit.hem_row <= 160, fit.hem_row)
+        self.assertEqual(fit.height, len(fit.extents))
+        self.assertEqual(fit.height, len(fit.torso))
+
+    def test_arm_nubs_are_outside_the_torso(self):
+        with_nubs = self.measure(head_over_body_image(), SYNTHETIC_BOX)
+        without = self.measure(head_over_body_image(nubs=False), SYNTHETIC_BOX)
+        row = 75  # box row through the nubs (image y 145)
+        left, right = with_nubs.extents[row]
+        t_left, t_right = with_nubs.torso[row]
+        self.assertTrue(left < t_left - 5 and right > t_right + 5)
+        # the torso matches the body measured without nubs (the belly window is a median estimate)
+        self.assertLessEqual(abs(t_left - without.extents[row][0]), 3)
+        self.assertLessEqual(abs(t_right - without.extents[row][1]), 3)
+
+    def test_off_centre_body_follows_the_silhouette_not_the_box(self):
+        centred = self.measure(head_over_body_image(120), SYNTHETIC_BOX)
+        shifted = self.measure(head_over_body_image(150), SYNTHETIC_BOX)
+        self.assertEqual(shifted.neck_row, centred.neck_row)
+        self.assertEqual(shifted.shoulder_row, centred.shoulder_row)
+        self.assertEqual(shifted.neck_left - centred.neck_left, 30)
+        self.assertEqual(shifted.neck_right - centred.neck_right, 30)
+        self.assertEqual(shifted.torso[100][0] - centred.torso[100][0], 30)
+
+    def test_box_starting_below_the_chin_starts_at_the_top_row(self):
+        fit = self.measure(head_over_body_image(), (0.0, 0.5, 1.0, 0.92))
+        self.assertEqual(fit.neck_row, fit.top_row)
+
+    def test_real_mascot_with_the_default_box(self):
+        fit = self.measure(self.example(), DEFAULT_BOX)  # the head is fully above the box
+        self.assertEqual(fit.height, 143)
+        self.assertEqual((fit.top_row, fit.neck_row), (0, 0))
+        self.assertTrue(8 <= fit.neck_left <= 10 and 276 <= fit.neck_right <= 280)
+        self.assertLessEqual(fit.shoulder_row, 4)
+        self.assertEqual(fit.hem_row, 142)
+
+    def test_real_mascot_with_the_example_body_box(self):
+        fit = self.measure(self.example(), EXAMPLE_BODY_BOX)
+        self.assertEqual(fit.height, 184)
+        self.assertEqual((fit.top_row, fit.neck_row), (0, 0))
+        self.assertTrue(89 <= fit.neck_left <= 93 and 290 <= fit.neck_right <= 294)
+        self.assertTrue(20 <= fit.shoulder_row <= 30, fit.shoulder_row)  # arm nubs start at row 24
+        self.assertEqual(fit.hem_row, 183)
+        left, right = fit.extents[100]  # through the arm nubs
+        t_left, t_right = fit.torso[100]
+        self.assertTrue(left <= 12 and right >= 372)
+        self.assertTrue(38 <= t_left <= 42 and 340 <= t_right <= 346, (t_left, t_right))
+
+    def test_closet_mask_built_from_the_example_silhouette(self):
+        example, mask = self.example(), self.example_mask()
+        for box in (DEFAULT_BOX, EXAMPLE_BODY_BOX):
+            with self.subTest(box=box):
+                self.assertEqual(self.measure(example, box, mask), self.measure(example, box))
+
+    def test_mask_over_an_opaque_image_succeeds(self):
+        opaque = Image.new("RGBA", self.example().size, (200, 200, 200, 255))
+        fit = self.measure(opaque, EXAMPLE_BODY_BOX, self.example_mask())
+        self.assertEqual(fit, self.measure(self.example(), EXAMPLE_BODY_BOX))
+
+    def test_fit_error_when_no_trustworthy_silhouette_exists(self):
+        from mascot_wardrobe.wardrobe.fit import FitError, measure_fit
+
+        empty = Image.new("L", (100, 100), 0)
+        tiny = Image.new("L", (8, 8), 0)
+        ImageDraw.Draw(tiny).rectangle((2, 2, 5, 5), fill=255)
+        opaque = Image.new("L", (100, 100), 255)
+        wide_head = Image.new("L", (100, 100), 0)  # wide band over a narrow body: no sound neck
+        ImageDraw.Draw(wide_head).rectangle((0, 0, 99, 30), fill=255)
+        ImageDraw.Draw(wide_head).rectangle((40, 31, 60, 99), fill=255)
+        cases = (("empty", empty), ("tiny", tiny), ("opaque", opaque), ("inconsistent", wide_head))
+        for name, image in cases:
+            with self.subTest(name=name), self.assertRaises(FitError):
+                measure_fit(image)
+        self.assertTrue(issubclass(FitError, ValueError))
+        with self.assertRaises(FitError):
+            measure_fit(opaque, Image.new("L", (50, 50), 255))  # mask size differs
+        with self.assertRaises(FitError):
+            measure_fit(opaque, empty)  # the mask leaves no silhouette
+
+    def test_measurement_is_deterministic(self):
+        first = self.measure(self.example(), EXAMPLE_BODY_BOX)
+        second = self.measure(self.example(), EXAMPLE_BODY_BOX)
+        self.assertEqual(first, second)
