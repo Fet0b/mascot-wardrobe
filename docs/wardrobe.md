@@ -3,6 +3,9 @@
 The `wardrobe` package turns one PNG and a body box into six outfits. It is deterministic,
 local and non-semantic.
 
+For a hash-pinned mascot, an explicit edit mask, item inventory and named wardrobes, see
+[closet.md](closet.md).
+
 ## What it does
 
 - `WardrobeAgent.generate(mascot, profile, output_dir)` validates the request, renders six

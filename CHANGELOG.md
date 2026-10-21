@@ -7,6 +7,16 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `mascot-wardrobe closet` (`init`, `add`, `edit`, `remove`, `save`, `use`, `catalog`, `list`,
+  `verify`): an identity-locked closet. One user mascot and an explicit binary edit mask are
+  copied verbatim and pinned by sha256; items are rendered by the existing `LocalComposer` with
+  protected pixels verified byte-identical; named wardrobes pin item versions and hashes and go
+  stale instead of silently changing; the catalog contact sheet is built from the saved item
+  files. Backward compatible: `generate`/`select`/`publish` and `manifest.json` are unchanged.
+  Items carry an editable `--name` (default derived from the id) and `--description`
+  (60/500 character limits, rejected rather than truncated), shown below each catalog tile;
+  label-only edits keep the image, hash and version. Schema 1 closets without labels still open.
+  See `docs/closet.md`.
 - `mascot-wardrobe publish`: selects one outfit and delivers the same square JPEG to opt-in live
   adapters (Hermes WhatsApp bridge on loopback; Telegram bot profile via `setMyProfilePhoto`),
   exposing the atlas path. Dry-run by default, `--apply` required. Bounded, redirect-denying,

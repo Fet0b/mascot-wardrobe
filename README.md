@@ -62,6 +62,21 @@ Use `--body-box X1 Y1 X2 Y2` (normalized, default `0.22 0.60 0.78 0.88`) to tell
 where your mascot's body is: the templates are fitted to that box (sleeves, hem, neckline), they
 do not detect anatomy. See [docs/wardrobe.md](docs/wardrobe.md).
 
+## Identity-locked closet
+
+`mascot-wardrobe closet` keeps one mascot as an immutable, hash-pinned source and an explicit
+binary edit mask, lets you add, edit and remove clothing items, save and switch named wardrobes,
+and builds a catalog sheet from the saved item files. Pixels outside the mask are verified
+byte-identical to the source, and a changed mascot, mask or item is detected. See
+[docs/closet.md](docs/closet.md).
+
+```bash
+mascot-wardrobe closet init --mascot mascot.png --mask mask.png
+mascot-wardrobe closet add coat --template very_cold --palette "#2878b5" "#e8b84b"
+mascot-wardrobe closet save winter --items coat
+mascot-wardrobe closet use winter && mascot-wardrobe closet catalog
+```
+
 ## Publishing a profile photo (opt-in)
 
 `mascot-wardrobe publish` selects one outfit and delivers the same square JPEG to the channels
@@ -120,6 +135,7 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 - [Architecture](docs/architecture.md) and the [ADRs](docs/adr/)
 - [Configuration, weather and time semantics](docs/configuration.md)
 - [Wardrobe compositor and atlas layout](docs/wardrobe.md)
+- [Identity-locked closet, wardrobes and catalog](docs/closet.md)
 - [Channels (sandbox exports and opt-in live adapters)](docs/channels.md)
 - [Scheduler examples (not installed)](docs/scheduler.md)
 - [Traceability](docs/traceability.md) and [verification](docs/verification.md)
