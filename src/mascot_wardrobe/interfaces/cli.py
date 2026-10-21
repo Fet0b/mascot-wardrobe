@@ -15,6 +15,7 @@ from mascot_wardrobe.application import (
     select_outfit,
     sync_sandbox,
 )
+from mascot_wardrobe.wardrobe import CATEGORIES
 
 DEFAULT_OUT = Path("mascot-wardrobe-out")
 
@@ -71,7 +72,113 @@ def parser():
     publish.add_argument("--telegram-expected-bot-id", type=int, help="Numeric bot id verified with getMe")
     publish.add_argument("--telegram-token-env", default="MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN")
     publish.add_argument("--telegram-state-dir", type=Path, default=DEFAULT_OUT / "state")
+    _closet_parser(commands)
     return root
+
+
+def _closet_parser(commands):
+    from mascot_wardrobe.closet import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH
+
+    closet = commands.add_parser(
+        "closet",
+        help="Identity-locked closet: immutable mascot, item inventory, named wardrobes, catalog sheet",
+        description=(
+            "Keep one user-supplied mascot as an immutable source (pinned by sha256) with an explicit "
+            "binary edit mask: garments only change masked pixels, every other byte stays identical. "
+            "Manage clothing items (add/edit/remove), save and switch named wardrobes, and build a "
+            "catalog sheet from the saved item assets. A changed mascot, mask or item is detected."
+        ),
+    )
+    closet.add_argument("--root", type=Path, default=DEFAULT_OUT / "closet", help="Closet directory")
+    actions = closet.add_subparsers(dest="action", required=True)
+    init = actions.add_parser("init", help="Create a closet; copies the mascot and mask, pins sha256")
+    init.add_argument("--mascot", required=True, type=Path, help="Static PNG; stored as an immutable source")
+    init.add_argument(
+        "--mask", required=True, type=Path, help="Binary PNG mask, same size: 255 editable, 0 protected"
+    )
+    for name, text in (
+        ("add", "Add a clothing item"),
+        ("edit", "Edit an item (garment changes bump its version; name/description do not)"),
+    ):
+        item = actions.add_parser(name, help=text)
+        item.add_argument("item", help="Item id (lowercase slug)")
+        item.add_argument(
+            "--template",
+            choices=CATEGORIES,
+            required=name == "add",
+            help="Garment template (the six deterministic outfits)",
+        )
+        item.add_argument(
+            "--palette",
+            nargs="+",
+            required=name == "add",
+            metavar="#RRGGBB",
+            help="First color: garment; last color: accent",
+        )
+        item.add_argument(
+            "--name",
+            help=(
+                f"Human-readable label shown in listings and the catalog (max {MAX_NAME_LENGTH} chars, "
+                "one line; default derives from the id). The id stays the stable slug"
+                + ("" if name == "add" else "; changing only name/description keeps the version and image")
+            ),
+        )
+        item.add_argument(
+            "--description",
+            help=(
+                f"Free-text description printed in full under the item in the catalog "
+                f"(max {MAX_DESCRIPTION_LENGTH} chars, over-long text is rejected, not truncated; "
+                "'' clears it)"
+            ),
+        )
+    remove = actions.add_parser("remove", help="Remove an item that no wardrobe uses")
+    remove.add_argument("item")
+    save = actions.add_parser("save", help="Save (or replace) a named wardrobe pinning item versions")
+    save.add_argument("name")
+    save.add_argument("--items", nargs="+", required=True, metavar="ITEM")
+    use = actions.add_parser("use", help="Switch the active wardrobe (refused if an item changed since)")
+    use.add_argument("name")
+    catalog = actions.add_parser("catalog", help="Build a catalog sheet from saved item assets")
+    catalog.add_argument("--wardrobe", help="Wardrobe name (default: the active one)")
+    actions.add_parser("list", help="Show items, wardrobes and the active wardrobe")
+    actions.add_parser("verify", help="Check mascot, mask and items against their recorded sha256")
+
+
+def _closet(args):
+    from mascot_wardrobe.closet import Closet
+
+    if args.action == "init":
+        closet = Closet.init(args.root, args.mascot, args.mask)
+        return {
+            "root": str(closet.root),
+            "mascot_sha256": closet._data["mascot"]["sha256"],
+            "mask_sha256": closet._data["mask"]["sha256"],
+        }
+    closet = Closet.open(args.root)
+    if args.action == "add":
+        return closet.add_item(
+            args.item, args.template, args.palette, name=args.name, description=args.description or ""
+        )
+    if args.action == "edit":
+        return closet.edit_item(
+            args.item,
+            template=args.template,
+            palette=args.palette,
+            name=args.name,
+            description=args.description,
+        )
+    if args.action == "remove":
+        closet.remove_item(args.item)
+        return {"removed": args.item}
+    if args.action == "save":
+        return closet.save_wardrobe(args.name, args.items)
+    if args.action == "use":
+        return closet.use_wardrobe(args.name)
+    if args.action == "catalog":
+        return closet.build_catalog(args.wardrobe)
+    if args.action == "list":
+        return {"active": closet.active, "items": closet.items(), "wardrobes": closet.wardrobes()}
+    return {"ok": True, "items": len(closet.items())}  # verify: open() already checked everything
 
 
 def _publish_targets(args):
@@ -148,6 +255,9 @@ def _temperature(args):
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.command == "closet":
+            print(json.dumps(_closet(args), ensure_ascii=False, indent=2))
+            return 0
         if args.command == "generate":
             manifest = prepare_wardrobe(
                 args.mascot,
