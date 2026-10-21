@@ -13,10 +13,9 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
-from PIL import Image
-
 from mascot_wardrobe import application
 from mascot_wardrobe.interfaces import cli
+from tests.imaging import write_body_png
 
 FAKE_TOKEN = "123456:FAKE-TEST-TOKEN"
 HEADER = "X-Example-Avatar: 1"
@@ -77,7 +76,7 @@ class PublishCliTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#666666").save(source)
+        write_body_png(source, "#666666")
         self.manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         self.approved = self.root / "approved"
         self.approved.mkdir()

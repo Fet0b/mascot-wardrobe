@@ -8,17 +8,28 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from tests.test_wardrobe import (
+    DEFAULT_BOX,
+    EXAMPLE_BODY_BOX,
+    PROBE,
+    ROOT,
+    FitAssertions,
+    pixel_box,
+    rect_region,
+)
+
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def write_mascot(path):
+    """A body ellipse the default mask box measures well, with two eyes above the mask."""
     image = Image.new("RGBA", (160, 200), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((28, 15, 132, 180), fill=(130, 180, 210, 255))
-    draw.ellipse((60, 50, 70, 60), fill="black")
-    draw.ellipse((92, 50, 102, 60), fill="black")
+    draw.ellipse((10, 70, 150, 185), fill=(130, 180, 210, 255))
+    draw.ellipse((60, 90, 70, 100), fill="black")
+    draw.ellipse((92, 90, 102, 100), fill="black")
     image.save(path)
 
 
@@ -652,3 +663,44 @@ class CatalogLabelTests(ClosetCase):
             for b in boxes[i + 1 :]:
                 separate = a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
                 self.assertTrue(separate, (a, b))
+
+
+class RealMaskFitTests(FitAssertions, unittest.TestCase):
+    def test_every_template_fits_the_example_mask_in_the_closet_flow(self):
+        from mascot_wardrobe.closet import Closet
+        from mascot_wardrobe.wardrobe import CATEGORIES
+
+        mascot_path = ROOT / "examples" / "mascot.png"
+        source = Image.open(mascot_path).convert("RGBA")
+        for box, head in ((DEFAULT_BOX, False), (EXAMPLE_BODY_BOX, True)):
+            with tempfile.TemporaryDirectory() as temporary:
+                mask = rect_region(source, pixel_box(box, source.size))
+                mask_path = Path(temporary) / "mask.png"
+                mask.save(mask_path)
+                closet = Closet.init(Path(temporary) / "closet", mascot_path, mask_path)
+                bbox = tuple(json.loads((closet.root / "closet.json").read_text())["mask"]["bbox"])
+                for index, template in enumerate(CATEGORIES):
+                    with self.subTest(box=box, template=template):
+                        item_id = template.replace("_", "-")
+                        closet.add_item(item_id, template, PROBE)
+                        with Image.open(closet.item_path(item_id)) as image:
+                            result = image.convert("RGBA")
+                        self.assert_fit(source, result, bbox, mask, index, head=head)
+
+    def test_a_template_set_two_closet_is_rejected_with_the_migrate_command(self):
+        from mascot_wardrobe.closet import Closet
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            write_mascot(base / "mascot.png")
+            write_mask(base / "mask.png")
+            Closet.init(base / "closet", base / "mascot.png", base / "mask.png")
+            data = json.loads((base / "closet" / "closet.json").read_text())
+            data["renderer"] = {"renderer": "local-composer", "templates": 2}
+            (base / "closet" / "closet.json").write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "template set 2.*closet --root .* migrate"):
+                Closet.open(base / "closet")
+            data["renderer"] = {"renderer": "other", "templates": 9}
+            (base / "closet" / "closet.json").write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "renderer configuration changed"):
+                Closet.open(base / "closet")

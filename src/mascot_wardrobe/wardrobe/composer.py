@@ -1,4 +1,10 @@
-"""Pillow compositor: geometric outfit templates restricted to the body box."""
+"""Pillow compositor: geometric outfit templates fitted to the measured silhouette.
+
+The compositor owns fit. ``measure_fit`` reads the real silhouette (the source alpha, limited to
+the explicit edit mask when one is given), ``_coverage`` shapes the garment on it (neckline,
+shoulders, sides, sleeves or armholes, hem), ``_layers`` paints it, and ``compose_layers`` is the
+single clip point. Nothing is painted above ``Fit.neck_row`` or outside the body box.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from PIL import Image, ImageChops, ImageColor, ImageDraw
+
+from mascot_wardrobe.wardrobe.fit import Fit, measure_fit
+from mascot_wardrobe.wardrobe.styles import STYLES, PaletteRoles, roles_from_colors, validate_style
 
 CATEGORIES = ("very_cold", "cold", "mild", "ambient", "warm", "very_hot")
 
@@ -18,6 +27,8 @@ class OutfitBrief:
     garments: tuple[str, ...]
     body_box: tuple[float, float, float, float]
     text: str
+    style: str = "classic"
+    region: Image.Image | None = None  # explicit edit mask (L, source size, 255 paintable)
 
 
 class Renderer(Protocol):
@@ -29,7 +40,8 @@ class Renderer(Protocol):
     binds that configuration and the concrete class; call counters are not options.
     The free-form garments terms are instructions for such a provider; the
     default compositor uses local per-category templates and does not interpret
-    natural language.
+    natural language. ``style`` names the garment style (see ``wardrobe.styles``); ``region``,
+    when given, is the explicit edit mask that limits both the measured silhouette and the paint.
     """
 
     def render(self, source: Image.Image, brief: OutfitBrief) -> Image.Image: ...
@@ -63,127 +75,247 @@ def _validate_brief(source: Image.Image, brief: OutfitBrief) -> None:
                 raise ValueError("Use opaque RGB colors.")
     except (TypeError, AttributeError) as exc:
         raise ValueError("Palette contains an invalid color.") from exc
+    validate_style(brief.style)
+    if brief.region is not None and (
+        not isinstance(brief.region, Image.Image)
+        or brief.region.mode != "L"
+        or brief.region.size != source.size
+    ):
+        raise ValueError("region must be an L image with the size of the source.")
 
 
-# Template geometry is expressed in fractions (u, v) of the body box, so it scales with any box.
-# The torso is a rounded shape slightly inset from the box sides, so the box can include arm
-# nubs that sleeves cover and sleeveless tops leave bare. The neckline is a half ellipse
-# centred on the top edge: it leaves room for a head that overlaps the box.
+# Fit parameters. Fractions are of the body box height (``h``) or width (``w``); the tests read the
+# same numbers through ``side_inset``, ``dip_rows`` and ``sleeve_span``.
 _SUPERSAMPLE = 4
-_TORSO = (0.115, 0.885)
-_TORSO_RADIUS = 0.19  # of the box width, matches a round belly
-_SLEEVE_WIDTH = 0.2
-_NECK = (0.27, 0.15)  # half width (of w) and depth (of h) of the neckline
+NECK_DIP = (0.15, 0.15, 0.15, 0.15, 0.15, 0.24)  # neckline depth below ``fit.neck_row``, per garment
+NECK_REACH = 0.34  # the neckline never opens wider than this share of the widest torso row
+SIDE_INSET = {"classic": 0.01, "streetwear": 0.01}  # garment edge margin inside the silhouette, of w
+SLEEVE_SHARE = (1.0, 1.0, 1.0, 0.4, 0.0, 0.0)  # share of the arm nub the sleeve covers
+ARMHOLES = {4: (0.2, 0.1), 5: (0.22, 0.11)}  # (depth of h, reach of w) for sleeveless garments
+_TRIM = (0.022, 0.016, 0.008, 0.012, 0.012, 0.0)  # collar band width, of w
+_CUFF = (0.09, 0.09, 0.06, 0.07, 0.0, 0.0)  # cuff depth, of h
+
+
+LEGACY_RENDERER_CONFIG = {"renderer": "local-composer", "templates": 2}  # fixed-fraction templates
+
+
+def side_inset(style: str, w: int) -> int:
+    """Pixels between the silhouette edge and the garment edge."""
+    return round(SIDE_INSET[style] * w)
+
+
+def dip_rows(index: int, h: int) -> int:
+    """Rows the neckline reaches below ``fit.neck_row``."""
+    return round(NECK_DIP[index] * h)
+
+
+def sleeve_span(index: int, fit: Fit) -> tuple[int, int] | None:
+    """First and last row of the sleeve, or None when the garment has no sleeve or no arm nub."""
+    rows = [
+        y
+        for y in range(fit.neck_row, fit.hem_row + 1)
+        if (e := fit.extents[y]) is not None
+        and ((t := fit.torso[y]) is None or t[0] - e[0] >= 2 or e[1] - t[1] >= 2)
+    ]
+    if not rows or SLEEVE_SHARE[index] == 0:
+        return None
+    top, bottom = rows[0], rows[-1]
+    return top, top + max(1, round(SLEEVE_SHARE[index] * (bottom - top + 1))) - 1
+
+
+def compose_layers(coverage: Image.Image, layers: list[Image.Image], *clips: Image.Image) -> Image.Image:
+    """Stack the RGBA layers and clip them: the single place where paint is limited.
+
+    The result alpha is the stack alpha multiplied by ``coverage`` and by every ``clip`` mask, so a
+    layer that covers the whole canvas still cannot paint outside the garment.
+    """
+    piece = Image.new("RGBA", coverage.size)
+    for layer in layers:
+        piece = Image.alpha_composite(piece, layer)
+    alpha = ImageChops.multiply(piece.getchannel("A"), coverage)
+    for clip in clips:
+        alpha = ImageChops.multiply(alpha, clip)
+    piece.putalpha(alpha)
+    return piece
 
 
 class LocalComposer:
     """Overlays fitted geometric templates without modifying the source file.
 
-    The templates fit a body box you provide; they do not detect anatomy.
+    The garment is fitted to the silhouette measured inside the body box you provide (and inside
+    the edit mask, when given); ``FitError`` is raised when no trustworthy silhouette exists.
     ``cache_config`` is part of the cache binding: bump ``templates`` whenever the pixels change.
     """
 
-    cache_config = {"renderer": "local-composer", "templates": 2}
+    cache_config = {"renderer": "local-composer", "templates": 3, "styles": list(STYLES)}
 
     def render(self, source: Image.Image, brief: OutfitBrief) -> Image.Image:
         _validate_brief(source, brief)
         index = CATEGORIES.index(brief.category)
-        primary = ImageColor.getrgb(brief.palette[0])
-        accent = ImageColor.getrgb(brief.palette[-1])
+        roles = roles_from_colors([ImageColor.getrgb(color)[:3] for color in brief.palette])
         width, height = source.size
-        x0, y0, x1, y1 = (
-            int(v * n) for v, n in zip(brief.body_box, (width, height, width, height), strict=True)
-        )
+        box = tuple(int(v * n) for v, n in zip(brief.body_box, (width, height, width, height), strict=True))
+        x0, y0, x1, y1 = box
         w, h = x1 - x0, y1 - y0
-        garment, coverage = _garment(index, w, h, primary, accent)
-        # Multiplying by the silhouette prevents painting the transparent background. The piece is
-        # exactly box-sized, so nothing outside the box can change.
-        piece = garment.convert("RGBA")
-        piece.putalpha(ImageChops.multiply(coverage, source.crop((x0, y0, x1, y1)).getchannel("A")))
+        alpha = source.crop(box).getchannel("A")
+        clips = [alpha]
+        region = None
+        if brief.region is not None:
+            region = brief.region.crop(box)
+            clips.append(region)
+        fit = measure_fit(alpha, region)
+        coverage = _coverage(index, brief.style, fit, w, h)
+        layers = _layers(index, brief.style, fit, roles, w, h)
+        # The piece is exactly box-sized, so nothing outside the box can change; the clips keep it
+        # off the transparent background and outside the edit mask.
         layer = Image.new("RGBA", source.size)
-        layer.paste(piece, (x0, y0))
+        layer.paste(compose_layers(coverage, layers, *clips), (x0, y0))
         return Image.alpha_composite(source, layer)
 
 
-def _garment(index, w, h, primary, accent):
-    """Draw one template at 4x and return its (w x h RGB colors, w x h L coverage)."""
-    s = _SUPERSAMPLE
-    colors = Image.new("RGB", (w * s, h * s), primary)
-    cover = Image.new("L", colors.size)
-    paint, shape = ImageDraw.Draw(colors), ImageDraw.Draw(cover)
+@dataclass(frozen=True)
+class _Shape:
+    inset: int
+    cx: float  # neck centre
+    half: float  # neckline half width
+    dip: int
+    span: int  # rows from the neck row to the hem row, inclusive
+    left: int  # outermost torso columns over the body rows
+    right: int  # exclusive
+    sleeve: tuple[int, int] | None
 
-    def box(u0, v0, u1, v1):
-        return (u0 * w * s, v0 * h * s, u1 * w * s - 1, v1 * h * s - 1)
 
-    def mirrored(u0, v0, u1, v1):
-        return (box(u0, v0, u1, v1), box(1 - u1, v0, 1 - u0, v1))
+def _shape(index: int, style: str, fit: Fit, w: int, h: int) -> _Shape:
+    body = [fit.torso[y] for y in range(fit.neck_row, fit.hem_row + 1) if fit.torso[y] is not None]
+    widest = max(b - a + 1 for a, b in body)
+    span = fit.hem_row + 1 - fit.neck_row
+    return _Shape(
+        inset=side_inset(style, w),
+        cx=(fit.neck_left + fit.neck_right + 1) / 2,
+        half=min((fit.neck_right - fit.neck_left + 1) / 2, NECK_REACH * widest),
+        dip=min(dip_rows(index, h), (span - 1) // 2),
+        span=span,
+        left=min(a for a, _ in body),
+        right=max(b for _, b in body) + 1,
+        sleeve=sleeve_span(index, fit),
+    )
 
-    def torso():
-        shape.rounded_rectangle(box(_TORSO[0], 0, _TORSO[1], 1), radius=_TORSO_RADIUS * w * s, fill=255)
 
-    def sleeves(end):
-        for rect in mirrored(0, 0.04, _SLEEVE_WIDTH, end):
-            shape.rounded_rectangle(rect, radius=0.05 * w * s, fill=255)
+def _row_edges(y: int, shape: _Shape, fit: Fit) -> tuple[int, int] | None:
+    """Garment columns [left, right) of one row: torso or, on sleeve rows, the whole silhouette."""
+    sleeved = shape.sleeve is not None and shape.sleeve[0] <= y <= shape.sleeve[1]
+    edge = fit.extents[y] if sleeved else fit.torso[y]
+    if edge is None:
+        return None
+    left, right = edge[0], edge[1] + 1
+    if right - left > 2 * shape.inset:  # tiny rows at the hem keep their full width
+        left, right = left + shape.inset, right - shape.inset
+    return left, right
 
-    def cuffs(end, depth=0.09):
-        for rect in mirrored(0, end - depth, _TORSO[0], end):  # only the part outside the torso
-            paint.rectangle(rect, fill=accent)
 
-    def neckline(trim=0.0, scale=1.0):
-        rx, ry = _NECK[0] * scale, _NECK[1] * scale
-        if trim:  # a band hugging the neckline
-            band = box(0.5 - rx - trim, -ry - trim * w / h, 0.5 + rx + trim, ry + trim * w / h)
-            paint.ellipse(band, fill=accent)
-        shape.ellipse(box(0.5 - rx, -ry, 0.5 + rx, ry), fill=0)
-        if trim:
-            paint.ellipse(box(0.5 - rx, -ry, 0.5 + rx, ry), fill=primary)
+class _Canvas:
+    """Supersampled drawing surface addressed in box pixels."""
 
-    def armholes(depth, reach):
-        for rect in mirrored(0.115 - reach, 0.25 - depth, 0.115 + reach, 0.25 + depth):
-            shape.ellipse(rect, fill=0)
+    def __init__(self, w: int, h: int, mode: str):
+        self.w, self.h = w, h
+        self.image = Image.new(mode, (w * _SUPERSAMPLE, h * _SUPERSAMPLE))
+        self.draw = ImageDraw.Draw(self.image)
+
+    def rect(self, x0, y0, x1, y1, fill) -> None:
+        if x1 > x0 and y1 > y0:
+            s = _SUPERSAMPLE
+            self.draw.rectangle((x0 * s, y0 * s, x1 * s - 1, y1 * s - 1), fill=fill)
+
+    def ellipse(self, cx, cy, rx, ry, fill) -> None:
+        s = _SUPERSAMPLE
+        self.draw.ellipse(((cx - rx) * s, (cy - ry) * s, (cx + rx) * s - 1, (cy + ry) * s - 1), fill=fill)
+
+    def line(self, x0, y0, x1, y1, width, fill) -> None:
+        s = _SUPERSAMPLE
+        self.draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=fill, width=max(1, round(width * s)))
+
+    def result(self) -> Image.Image:
+        return self.image.resize((self.w, self.h), Image.Resampling.BOX)
+
+
+def _coverage(index: int, style: str, fit: Fit, w: int, h: int) -> Image.Image:
+    """Where the garment exists: torso and sleeves from the measured silhouette, minus the openings."""
+    shape = _shape(index, style, fit, w, h)
+    canvas = _Canvas(w, h, "L")
+    for y in range(fit.neck_row, fit.hem_row + 1):
+        edges = _row_edges(y, shape, fit)
+        if edges is not None:
+            canvas.rect(edges[0], y, edges[1], y + 1, 255)
+    if index in ARMHOLES:
+        depth, reach = ARMHOLES[index]
+        ry = round(depth * h / 2)
+        top = fit.shoulder_row + 1  # the armhole starts right under the shoulder row
+        centre = min(top + ry, fit.hem_row)
+        edge = fit.torso[centre] or fit.torso[fit.shoulder_row] or (shape.left, shape.right - 1)
+        for x in (edge[0], edge[1] + 1):
+            canvas.ellipse(x, top + ry, reach * w, ry, 0)
+    canvas.ellipse(shape.cx, fit.neck_row, shape.half, shape.dip, 0)  # nothing above neck_row exists
+    return canvas.result()
+
+
+def _layers(index: int, style: str, fit: Fit, roles: PaletteRoles, w: int, h: int) -> list[Image.Image]:
+    """Ordered RGBA paint layers; ``compose_layers`` clips them to the coverage."""
+    shape = _shape(index, style, fit, w, h)
+    top, span = fit.neck_row, shape.span
+    base, accent = roles.base, roles.accent
+
+    def row(v):  # a row at share v of the garment height
+        return top + v * span
+
+    fabric = Image.new("RGBA", (w, h), (*(accent if index == 5 else base), 255))
+    detail = _Canvas(w, h, "RGBA")
 
     def band(v0, v1, color=accent):
-        paint.rectangle(box(_TORSO[0], v0, _TORSO[1], v1), fill=color)
+        detail.rect(shape.left, row(v0), shape.right, fit.hem_row + 1 if v1 >= 1 else row(v1), color)
 
-    def line(u0, v0, u1, v1, width, color=accent):
-        paint.line((u0 * w * s, v0 * h * s, u1 * w * s, v1 * h * s), fill=color, width=round(width * s))
+    def cuffs(depth):
+        if shape.sleeve is None:
+            return
+        end = shape.sleeve[1]
+        for y in range(end - max(1, round(depth * h)) + 1, end + 1):
+            e, t = fit.extents[y], fit.torso[y]
+            if e is None:
+                continue
+            if t is None:
+                detail.rect(e[0], y, e[1] + 1, y + 1, accent)
+            else:
+                detail.rect(e[0], y, t[0], y + 1, accent)  # only the part outside the torso
+                detail.rect(t[1] + 1, y, e[1] + 1, y + 1, accent)
 
-    torso()
+    def collar(trim):
+        if trim:  # a band hugging the neckline
+            t = trim * w
+            detail.ellipse(shape.cx, top, shape.half + t, shape.dip + t, accent)
+
+    def line(v0, v1, x0, x1, width):
+        detail.line(x0, row(v0), x1, row(v1), width, accent)
+
     if index == 0:  # padded coat: long sleeves, quilting seams, high collar
-        sleeves(0.5)
         for v in (0.3, 0.5, 0.7):
-            line(_TORSO[0], v, _TORSO[1], v, 2)
-        cuffs(0.5)
-        neckline(trim=0.022)
+            line(v, v, shape.left, shape.right, 2)
+        cuffs(_CUFF[0])
     elif index == 1:  # closed jacket: long sleeves, zipper, collar
-        sleeves(0.5)
-        line(0.5, 0.12, 0.5, 1, 3)
+        line(0.12, 1, shape.cx, shape.cx, 3)
         band(0.9, 1)
-        cuffs(0.5)
-        neckline(trim=0.016)
+        cuffs(_CUFF[1])
     elif index == 2:  # light cardigan: long sleeves, buttons, ribbed hem
-        sleeves(0.5)
         band(0.88, 1)
-        cuffs(0.5, 0.06)
+        cuffs(_CUFF[2])
         for v in (0.3, 0.5, 0.7):
-            paint.ellipse(box(0.49, v - 0.02, 0.51, v + 0.02), fill=accent)
-        neckline(trim=0.008)
+            detail.ellipse(shape.cx, row(v), 0.01 * w, 0.01 * w, accent)
     elif index == 3:  # t-shirt: short sleeves, crew collar
-        sleeves(0.32)
-        cuffs(0.32, 0.07)
-        neckline(trim=0.012)
+        cuffs(_CUFF[3])
     elif index == 4:  # sleeveless tee: armholes, collar
-        armholes(0.2, 0.1)
-        neckline(trim=0.012)
         band(0.92, 1)
-    else:  # camisole: deep scoop, big armholes, light accent body
-        paint.rectangle((0, 0, w * s, h * s), fill=accent)
-        armholes(0.22, 0.11)
-        shape.ellipse(box(0.25, -0.24, 0.75, 0.24), fill=0)
-        for rect in mirrored(0.22, 0, 0.29, 0.2):  # thin straps over the shoulders
-            shape.rectangle(rect, fill=255)
-            paint.rectangle(rect, fill=primary)
-        neckline()
-        band(0.92, 1, primary)
-    size = (w, h)
-    return colors.resize(size, Image.Resampling.BOX), cover.resize(size, Image.Resampling.BOX)
+    else:  # camisole: deep scoop, big armholes, light accent body, thin straps
+        strap = 0.07 * w
+        for x0 in (shape.cx - shape.half - strap, shape.cx + shape.half):
+            detail.rect(x0, top, x0 + strap, row(0.2), base)
+        band(0.92, 1, base)
+    collar(_TRIM[index])
+    return [fabric, detail.result()]

@@ -2,11 +2,12 @@
 
 import hashlib
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BOX = (0.22, 0.60, 0.78, 0.88)
@@ -34,11 +35,12 @@ def crop_to_box(image, box):
 
 
 def source_image():
+    """A body ellipse that fills the default box except at its bottom, with two eyes above the box."""
     image = Image.new("RGBA", (160, 200), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((28, 15, 132, 180), fill=(130, 180, 210, 255))
-    draw.ellipse((60, 50, 70, 60), fill="black")
-    draw.ellipse((92, 50, 102, 60), fill="black")
+    draw.ellipse((10, 70, 150, 185), fill=(130, 180, 210, 255))
+    draw.ellipse((60, 90, 70, 100), fill="black")
+    draw.ellipse((92, 90, 102, 100), fill="black")
     return image
 
 
@@ -571,7 +573,261 @@ class MeasureFitTests(unittest.TestCase):
         with self.assertRaises(FitError):
             measure_fit(opaque, empty)  # the mask leaves no silhouette
 
+    def test_a_full_width_odd_belly_keeps_its_whole_width(self):
+        fit = self.measure(source_image(), (0.22, 0.60, 0.78, 0.88))  # 89 columns, narrower at the hem
+        self.assertEqual(fit.torso[20], (0, 88))
+        self.assertEqual((fit.neck_row, fit.shoulder_row), (0, 0))
+
     def test_measurement_is_deterministic(self):
         first = self.measure(self.example(), EXAMPLE_BODY_BOX)
         second = self.measure(self.example(), EXAMPLE_BODY_BOX)
         self.assertEqual(first, second)
+
+
+PROBE = ("#ff00aa", "#00e5ff")  # colours that never occur in the mascots, so a changed pixel is garment
+CATEGORY_NAMES = ("very_cold", "cold", "mild", "ambient", "warm", "very_hot")
+
+
+def pixel_box(box, size):
+    width, height = size
+    return tuple(int(v * n) for v, n in zip(box, (width, height, width, height), strict=True))
+
+
+def garment_mask(source, result):
+    """255 wherever the result differs from the source in any channel."""
+    r, g, b, a = ImageChops.difference(source, result).split()
+    changed = ImageChops.lighter(ImageChops.lighter(r, g), ImageChops.lighter(b, a))
+    return changed.point(lambda v: 255 if v > 0 else 0)
+
+
+def row_span(mask, y):
+    data = mask.tobytes()
+    row = data[y * mask.width : (y + 1) * mask.width]
+    left = row.find(255)
+    return None if left < 0 else (left, row.rfind(255))
+
+
+def rect_region(image, box_px):
+    """An edit mask like the closet's: the silhouette inside the rectangle, protected elsewhere."""
+    mask = Image.new("L", image.size, 0)
+    keep = image.getchannel("A").point(lambda v: 255 if v > 127 else 0).crop(box_px)
+    mask.paste(keep, box_px[:2])
+    return mask
+
+
+def head_mask(size):
+    """Head of examples/mascot.png (art/generate_art.py), shrunk by 2 px."""
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).ellipse((256 - 180, 171 - 132, 256 + 180, 171 + 132), fill=255)
+    return mask
+
+
+class FitAssertions:
+    """Symptom-specific fit checks: neckline, shoulders, sides, sleeves, hem, protected pixels."""
+
+    def assert_fit(self, source, result, box_px, region, index, *, head=False, style="classic"):
+        from mascot_wardrobe.wardrobe import composer
+        from mascot_wardrobe.wardrobe.fit import measure_fit
+
+        x0, y0, x1, y1 = box_px
+        w, h = x1 - x0, y1 - y0
+        alpha = source.getchannel("A").crop(box_px)
+        fit = measure_fit(alpha, None if region is None else region.crop(box_px))
+        inset = composer.side_inset(style, w)
+        dip = composer.dip_rows(index, h)
+        span = composer.sleeve_span(index, fit)
+        gm = garment_mask(source, result).crop(box_px)
+        silhouette = alpha.point(lambda v: 255 if v > 127 else 0)
+        if region is not None:
+            kept = region.crop(box_px).point(lambda v: 255 if v > 127 else 0)
+            silhouette = ImageChops.multiply(silhouette, kept)
+        label = f"category {index}"
+
+        # protected pixels: nothing outside the box, nothing above the neck, no head pixel
+        expected = source.copy()
+        expected.paste(result.crop(box_px), (x0, y0))
+        self.assertEqual(expected.tobytes(), result.tobytes(), f"{label}: pixels outside the box changed")
+        self.assertEqual(
+            result.crop((x0, y0, x1, y0 + fit.neck_row)).tobytes(),
+            source.crop((x0, y0, x1, y0 + fit.neck_row)).tobytes(),
+            f"{label}: pixels above the neck row changed",
+        )
+        if head:
+            painted = ImageChops.multiply(garment_mask(source, result), head_mask(source.size))
+            self.assertIsNone(painted.getbbox(), f"{label}: head pixels were painted")
+        # nothing on transparent pixels or outside the mask
+        transparent = alpha.point(lambda v: 255 if v == 0 else 0)
+        self.assertIsNone(ImageChops.multiply(gm, transparent).getbbox(), f"{label}: painted on transparency")
+        if region is not None:
+            outside = region.crop(box_px).point(lambda v: 255 if v == 0 else 0)
+            self.assertIsNone(
+                ImageChops.multiply(gm, outside).getbbox(), f"{label}: painted outside the mask"
+            )
+
+        sil_rows = silhouette.tobytes()
+        armhole = composer.ARMHOLES.get(index)
+        armhole_rows = round(armhole[0] * h / 2) if armhole else 0
+        reach = math.ceil(armhole[1] * w) + 1 if armhole else 0
+
+        def in_armhole(y):
+            return bool(armhole) and fit.shoulder_row < y <= fit.shoulder_row + 1 + 2 * armhole_rows
+
+        def bare(y, left, right):
+            """Silhouette pixels between each edge and the garment edge on one row."""
+            got = row_span(gm, y)
+            self.assertIsNotNone(got, f"{label}: row {y} has no garment")
+            sil = sil_rows[y * w : (y + 1) * w]
+            self.assertGreaterEqual(got[0], left - 1, f"{label}: garment beyond the left edge at row {y}")
+            self.assertLessEqual(got[1], right + 1, f"{label}: garment beyond the right edge at row {y}")
+            return sum(1 for x in range(left, got[0]) if sil[x]), sum(
+                1 for x in range(got[1] + 1, right + 1) if sil[x]
+            )
+
+        # neckline: no bare gap right under the collar
+        row = fit.neck_row + dip + 1
+        torso = fit.torso[row]
+        sil = sil_rows[row * w : (row + 1) * w]
+        covered = gm.tobytes()[row * w : (row + 1) * w]
+        for x in range(fit.neck_left, fit.neck_right + 1):
+            if sil[x] != 255 or torso is None or not torso[0] + inset <= x <= torso[1] - inset:
+                continue
+            if in_armhole(row) and not torso[0] + reach <= x <= torso[1] - reach:
+                continue  # the armhole, not the collar, opens the side
+            self.assertEqual(covered[x], 255, f"{label}: bare gap at column {x} under the collar")
+
+        # shoulders: the garment spans the torso (the whole silhouette for long sleeves) minus the inset
+        in_sleeve = span is not None and span[0] <= fit.shoulder_row <= span[1]
+        edge = fit.extents[fit.shoulder_row] if in_sleeve else fit.torso[fit.shoulder_row]
+        left_bare, right_bare = bare(fit.shoulder_row, *edge)
+        self.assertLessEqual(left_bare, inset + 1, f"{label}: left shoulder")
+        self.assertLessEqual(right_bare, inset + 1, f"{label}: right shoulder")
+
+        # sides and sleeves, row by row from the shoulders to the hem
+        for y in range(fit.shoulder_row, fit.hem_row + 1):
+            torso = fit.torso[y]
+            if torso is None or in_armhole(y):
+                continue
+            sleeved = span is not None and span[0] <= y <= span[1]
+            left_bare, right_bare = bare(y, *(fit.extents[y] if sleeved else torso))
+            self.assertLessEqual(left_bare, inset + 1, f"{label}: bare left side at row {y}")
+            self.assertLessEqual(right_bare, inset + 1, f"{label}: bare right side at row {y}")
+        if armhole:  # the armhole is cut at the sides below the shoulder row
+            y = fit.shoulder_row + 1 + armhole_rows
+            got = row_span(gm, y)
+            self.assertGreater(got[0] - fit.torso[y][0], 0.5 * armhole[1] * w, f"{label}: no armhole")
+            if fit.extents[y][0] < fit.torso[y][0]:  # arm nubs stay bare
+                self.assertGreater(got[0], fit.torso[y][0], f"{label}: arm nub painted")
+
+        # hem
+        last = max(y for y in range(h) if row_span(gm, y) is not None)
+        self.assertGreaterEqual(last, fit.hem_row - 1, f"{label}: the hem stops short")
+
+
+def fit_cases():
+    """(name, source, body box, region, whether the head overlaps the box)."""
+    example = Image.open(ROOT / "examples" / "mascot.png").convert("RGBA")
+    default_px = pixel_box(DEFAULT_BOX, example.size)
+    example_px = pixel_box(EXAMPLE_BODY_BOX, example.size)
+    return [
+        ("synthetic", head_over_body_image(), SYNTHETIC_BOX, None, False),
+        ("synthetic off-centre", head_over_body_image(150), SYNTHETIC_BOX, None, False),
+        ("real default box", example, DEFAULT_BOX, None, False),
+        ("real example box", example, EXAMPLE_BODY_BOX, None, True),
+        ("real default box with mask", example, DEFAULT_BOX, rect_region(example, default_px), False),
+        ("real example box with mask", example, EXAMPLE_BODY_BOX, rect_region(example, example_px), True),
+    ]
+
+
+class FitTests(FitAssertions, unittest.TestCase):
+    def test_every_garment_fits_the_measured_silhouette(self):
+        from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
+
+        for name, source, box, region, head in fit_cases():
+            for index, category in enumerate(CATEGORY_NAMES):
+                with self.subTest(case=name, category=category):
+                    brief = OutfitBrief(category, PROBE, (), box, "fit", region=region)
+                    result = LocalComposer().render(source.copy(), brief)
+                    self.assert_fit(source, result, pixel_box(box, source.size), region, index, head=head)
+
+    def test_prepare_wardrobe_fits_the_real_mascot_in_both_boxes(self):
+        from mascot_wardrobe.application import prepare_wardrobe
+
+        source = Image.open(ROOT / "examples" / "mascot.png").convert("RGBA")
+        for box, head in ((DEFAULT_BOX, False), (EXAMPLE_BODY_BOX, True)):
+            with tempfile.TemporaryDirectory() as temporary:
+                manifest = prepare_wardrobe(
+                    ROOT / "examples" / "mascot.png", "mascot", "BR", Path(temporary) / "out", body_box=box
+                )
+                outfits = json.loads(manifest.read_text())["outfits"]
+                for index, outfit in enumerate(outfits):
+                    with self.subTest(box=box, category=outfit["category"]):
+                        result = Image.open(manifest.parent / outfit["png"]).convert("RGBA")
+                        self.assert_fit(source, result, pixel_box(box, source.size), None, index, head=head)
+
+    def test_compose_layers_clips_a_full_canvas_layer_to_the_coverage(self):
+        from mascot_wardrobe.wardrobe.composer import compose_layers
+
+        coverage = Image.new("L", (40, 30), 0)
+        ImageDraw.Draw(coverage).rectangle((10, 5, 29, 24), fill=255)
+        layers = [
+            Image.new("RGBA", (40, 30), (255, 0, 0, 255)),
+            Image.new("RGBA", (40, 30), (0, 0, 255, 128)),
+        ]
+        piece = compose_layers(coverage, layers)
+        self.assertEqual(piece.size, (40, 30))
+        self.assertEqual(piece.getchannel("A").getbbox(), (10, 5, 30, 25))
+        self.assertEqual(piece.getpixel((0, 0))[3], 0)
+        self.assertEqual(piece.getpixel((20, 15))[3], 255)
+        extra = Image.new("L", (40, 30), 0)
+        ImageDraw.Draw(extra).rectangle((0, 0, 19, 29), fill=255)
+        self.assertEqual(compose_layers(coverage, layers, extra).getchannel("A").getbbox(), (10, 5, 20, 25))
+
+    def test_brief_validates_style_and_region(self):
+        from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
+
+        source = source_image()
+        box = (0.22, 0.60, 0.78, 0.88)
+        for change in (
+            dict(style="grunge"),
+            dict(region=Image.new("RGB", source.size)),
+            dict(region=Image.new("L", (10, 10))),
+            dict(region="mask"),
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                LocalComposer().render(source, OutfitBrief("cold", PROBE, (), box, "t", **change))
+        full = Image.new("L", source.size, 255)
+        LocalComposer().render(source, OutfitBrief("cold", PROBE, (), box, "t", style="classic", region=full))
+
+    def test_fully_opaque_box_fails_without_a_mask_and_succeeds_with_one(self):
+        from mascot_wardrobe.wardrobe import FitError, LocalComposer, OutfitBrief
+
+        opaque = Image.new("RGBA", (160, 200), (200, 200, 200, 255))
+        box = (0.22, 0.60, 0.78, 0.88)
+        with self.assertRaises(FitError):
+            LocalComposer().render(opaque, OutfitBrief("cold", PROBE, (), box, "t"))
+        mask = Image.new("L", opaque.size, 0)
+        ImageDraw.Draw(mask).ellipse((20, 120, 140, 175), fill=255)
+        result = LocalComposer().render(opaque, OutfitBrief("cold", PROBE, (), box, "t", region=mask))
+        self.assertIsNotNone(garment_mask(opaque, result).getbbox())
+
+    def test_cache_config_is_template_revision_three(self):
+        from mascot_wardrobe.wardrobe import LocalComposer
+
+        self.assertEqual(
+            LocalComposer.cache_config,
+            {"renderer": "local-composer", "templates": 3, "styles": ["classic", "streetwear"]},
+        )
+
+    def test_a_templates_two_manifest_is_rejected_with_a_regenerate_message(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = AgentTests().fixture(root)
+            output = root / "out"
+            manifest = WardrobeAgent().generate(mascot, profile, output)
+            data = json.loads(manifest.read_text())
+            data["request"]["renderer_config"] = {"renderer": "local-composer", "templates": 2}
+            manifest.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "template set 2.*regenerate.*new output directory"):
+                WardrobeAgent().generate(mascot, profile, output)

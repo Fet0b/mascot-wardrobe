@@ -78,12 +78,17 @@ def validate_provenance(value: str) -> str:
     return value
 
 
-def palette_roles(palette: Sequence[str]) -> PaletteRoles:
-    p = validate_palette(palette)
+def roles_from_colors(colors: Sequence) -> PaletteRoles:
+    """Assign the four roles to a non-empty sequence of colours of any one type."""
+    p = list(colors)
     base, accent = p[0], p[-1]
     secondary = p[1] if len(p) >= 3 else p[0]
     highlight = p[-2] if len(p) >= 4 else accent
-    return PaletteRoles(_rgb(base), _rgb(secondary), _rgb(accent), _rgb(highlight))
+    return PaletteRoles(base, secondary, accent, highlight)
+
+
+def palette_roles(palette: Sequence[str]) -> PaletteRoles:
+    return roles_from_colors([_rgb(color) for color in validate_palette(palette)])
 
 
 def _pick(seed: str, garment: str, kind: str, size: int) -> int:

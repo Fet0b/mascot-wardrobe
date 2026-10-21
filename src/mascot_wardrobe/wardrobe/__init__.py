@@ -1,7 +1,8 @@
 """Local deterministic generation: no diffusion, network or remote AI calls.
 
 The normalized body box limits clothing to the body; there is no semantic segmentation.
-Existing transparency is preserved; the background of an opaque PNG is not removed.
+Existing transparency is preserved; the background of an opaque PNG is not removed. A body box
+over a fully opaque PNG cannot be measured and raises ``FitError``; pass an edit mask instead.
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ from PIL import Image
 
 from mascot_wardrobe.wardrobe.composer import (  # noqa: F401
     CATEGORIES,
+    LEGACY_RENDERER_CONFIG,
     LocalComposer,
     OutfitBrief,
     Renderer,
     _validate_brief,
 )
+from mascot_wardrobe.wardrobe.fit import FitError
 
 # Row order of the 9-row state atlas layout (the exported atlas contract).
 STATE_ROWS = (
@@ -197,6 +200,12 @@ class WardrobeAgent:
         if target.exists():
             try:
                 manifest = json.loads(target.read_text(encoding="utf-8"))
+                stored = manifest["request"]["renderer_config"]
+                if stored == LEGACY_RENDERER_CONFIG and request["renderer_config"] != stored:
+                    raise ValueError(
+                        "This catalog was made by template set 2, which this version cannot reuse: "
+                        "regenerate it into a new output directory."
+                    )
                 if (
                     any(manifest[key] != value for key, value in metadata.items())
                     or not isinstance(manifest["outfits"], list)
@@ -293,4 +302,4 @@ class WardrobeAgent:
         return target
 
 
-__all__ = ["WardrobeAgent", "LocalComposer", "OutfitBrief", "Renderer", "STATE_ROWS"]
+__all__ = ["WardrobeAgent", "LocalComposer", "OutfitBrief", "Renderer", "FitError", "STATE_ROWS"]

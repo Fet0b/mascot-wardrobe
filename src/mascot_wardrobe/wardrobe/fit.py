@@ -7,6 +7,7 @@ There is no fallback to fixed fractions of the body box.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from statistics import median
 
@@ -100,7 +101,9 @@ def measure_fit(alpha: Image.Image, region: Image.Image | None = None) -> Fit:
     lower = [y for y in filled if y >= height // 2] or filled
     belly = median(widths[y] for y in lower)
     centre = median((extents[y][0] + extents[y][1]) / 2 for y in lower)
-    window = (round(centre - belly / 2), round(centre + belly / 2) - 1)
+    belly_width = math.ceil(belly)  # whole pixels, so a full-width belly keeps its full width
+    first = math.floor(centre - belly_width / 2 + 0.5)
+    window = (first, first + belly_width - 1)
     torso: list[Extent | None] = []
     for e in extents:
         if e is None:

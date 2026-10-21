@@ -3,9 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
-
 from mascot_wardrobe.infrastructure.policies import load_profile
+from tests.imaging import write_body_png
 
 
 class ApplicationTests(unittest.TestCase):
@@ -19,7 +18,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "sync_sandbox"), "Missing sandbox integration use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         selected = application.select_outfit(manifest, "BR", 25)
         state = self.root / "state"
@@ -38,7 +37,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "export_outfit"), "Missing export integration use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         selected = application.select_outfit(manifest, "BR", 25)
         for channel in ("telegram", "discord", "hermes-cli"):
@@ -54,7 +53,7 @@ class ApplicationTests(unittest.TestCase):
         from mascot_wardrobe import application
 
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         original = json.loads(manifest.read_text())
         original["outfits"][0]["category"] = []
@@ -74,7 +73,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "prepare_wardrobe"), "Missing application preparation use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(
             source, "pet", "BR", self.root / "catalog", body_box=(0.2, 0.5, 0.8, 0.9)
         )
@@ -92,7 +91,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertFalse(hasattr(application, "PROJECT_ROOT"))
         self.assertFalse(hasattr(application, "SCRATCH_ROOT"))
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         resolved = application.safe_output(self.root / "plain" / "catalog")
         self.assertTrue(resolved.is_absolute())
         self.assertEqual(resolved, (self.root / "plain" / "catalog").resolve())

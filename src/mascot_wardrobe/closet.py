@@ -18,7 +18,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from mascot_wardrobe.wardrobe import CATEGORIES, LocalComposer, OutfitBrief, _safe_root
+from mascot_wardrobe.wardrobe import (
+    CATEGORIES,
+    LEGACY_RENDERER_CONFIG,
+    LocalComposer,
+    OutfitBrief,
+    _safe_root,
+)
 
 SCHEMA_VERSION = 1
 TILE = (192, 208)
@@ -302,6 +308,11 @@ class Closet:
         if _sha256_bytes(mask) != self._data["mask"]["sha256"]:
             raise ValueError("The edit mask changed: sha256 mismatch with the closet record.")
         if self._data["renderer"] != json.loads(json.dumps(LocalComposer.cache_config)):
+            if self._data["renderer"] == LEGACY_RENDERER_CONFIG:
+                raise ValueError(
+                    "This closet was made by template set 2; upgrade it with: "
+                    f"mascot-wardrobe closet --root {self.root} migrate"
+                )
             raise ValueError("The renderer configuration changed; items were made by another template set.")
         source = _decode(mascot, "The mascot", "RGBA")
         edit, _ = _binary_mask(_decode(mask, "The edit mask", "L"))
@@ -333,8 +344,10 @@ class Closet:
             raise ValueError(f"template must be one of: {', '.join(CATEGORIES)}.")
         width, height = source.size
         x0, y0, x1, y1 = self._data["mask"]["bbox"]
-        box = (x0 / width, y0 / height, x1 / width, y1 / height)
-        brief = OutfitBrief(template, palette, (), box, "closet item")
+        # Half-pixel offsets keep int(v * n) on the mask bbox despite float rounding; the compositor
+        # measures the silhouette inside the mask, so the mask is its region.
+        box = ((x0 + 0.5) / width, (y0 + 0.5) / height, (x1 + 0.5) / width, (y1 + 0.5) / height)
+        brief = OutfitBrief(template, palette, (), box, "closet item", region=mask)
         dressed = LocalComposer().render(source.copy(), brief)
         result = Image.composite(dressed, source, mask)  # mask 0 keeps every source byte
         if not _protected_matches(result, source, mask):

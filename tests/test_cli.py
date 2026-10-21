@@ -7,7 +7,7 @@ import unittest
 from datetime import UTC
 from pathlib import Path
 
-from PIL import Image
+from tests.imaging import write_body_png
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,7 +18,7 @@ class CLITests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#666666").save(self.source)
+        write_body_png(self.source, "#666666")
 
     def run_cli(self, *args, cwd=ROOT):
         env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
