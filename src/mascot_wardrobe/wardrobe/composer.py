@@ -89,9 +89,16 @@ def _validate_brief(source: Image.Image, brief: OutfitBrief) -> None:
 _SUPERSAMPLE = 4
 NECK_DIP = (0.15, 0.15, 0.15, 0.15, 0.15, 0.24)  # neckline depth below ``fit.neck_row``, per garment
 NECK_REACH = 0.34  # the neckline never opens wider than this share of the widest torso row
-SIDE_INSET = {"classic": 0.01, "streetwear": 0.01}  # garment edge margin inside the silhouette, of w
-SLEEVE_SHARE = (1.0, 1.0, 1.0, 0.4, 0.0, 0.0)  # share of the arm nub the sleeve covers
-ARMHOLES = {4: (0.2, 0.1), 5: (0.22, 0.11)}  # (depth of h, reach of w) for sleeveless garments
+SIDE_INSET = {"classic": 0.01, "streetwear": 0.0}  # garment edge margin inside the silhouette, of w
+SLEEVE_SHARE = {
+    "classic": (1.0, 1.0, 1.0, 0.4, 0.0, 0.0),  # share of the arm nub the sleeve covers
+    "streetwear": (1.0, 1.0, 1.0, 0.55, 0.0, 0.0),  # oversized: longer short sleeves
+}
+SHOULDER_DROP = {"classic": 0.0, "streetwear": 0.1}  # share of the arm nub left bare under the shoulder
+ARMHOLES = {  # (depth of h, reach of w) for sleeveless garments
+    "classic": {4: (0.2, 0.1), 5: (0.22, 0.11)},
+    "streetwear": {4: (0.27, 0.13), 5: (0.29, 0.14)},
+}
 _TRIM = (0.022, 0.016, 0.008, 0.012, 0.012, 0.0)  # collar band width, of w
 _CUFF = (0.09, 0.09, 0.06, 0.07, 0.0, 0.0)  # cuff depth, of h
 
@@ -109,18 +116,27 @@ def dip_rows(index: int, h: int) -> int:
     return round(NECK_DIP[index] * h)
 
 
-def sleeve_span(index: int, fit: Fit) -> tuple[int, int] | None:
-    """First and last row of the sleeve, or None when the garment has no sleeve or no arm nub."""
+def armhole(style: str, index: int) -> tuple[float, float] | None:
+    """(depth of h, reach of w) of the armhole, or None for garments with sleeves."""
+    return ARMHOLES[style].get(index)
+
+
+def sleeve_span(index: int, fit: Fit, style: str = "classic") -> tuple[int, int] | None:
+    """First and last row of the sleeve, or None when the garment has no sleeve or no arm nub.
+
+    A dropped shoulder (streetwear) starts the sleeve lower on the arm nub.
+    """
     rows = [
         y
         for y in range(fit.neck_row, fit.hem_row + 1)
         if (e := fit.extents[y]) is not None
         and ((t := fit.torso[y]) is None or t[0] - e[0] >= 2 or e[1] - t[1] >= 2)
     ]
-    if not rows or SLEEVE_SHARE[index] == 0:
+    if not rows or SLEEVE_SHARE[style][index] == 0:
         return None
     top, bottom = rows[0], rows[-1]
-    return top, top + max(1, round(SLEEVE_SHARE[index] * (bottom - top + 1))) - 1
+    end = top + max(1, round(SLEEVE_SHARE[style][index] * (bottom - top + 1))) - 1
+    return min(top + round(SHOULDER_DROP[style] * (bottom - top + 1)), end), end
 
 
 def compose_layers(coverage: Image.Image, layers: list[Image.Image], *clips: Image.Image) -> Image.Image:
@@ -197,7 +213,7 @@ def _shape(index: int, style: str, fit: Fit, w: int, h: int) -> _Shape:
         span=span,
         left=min(a for a, _ in body),
         right=max(b for _, b in body) + 1,
-        sleeve=sleeve_span(index, fit),
+        sleeve=sleeve_span(index, fit, style),
     )
 
 
@@ -246,8 +262,8 @@ def _coverage(index: int, style: str, fit: Fit, w: int, h: int) -> Image.Image:
         edges = _row_edges(y, shape, fit)
         if edges is not None:
             canvas.rect(edges[0], y, edges[1], y + 1, 255)
-    if index in ARMHOLES:
-        depth, reach = ARMHOLES[index]
+    if (opening := armhole(style, index)) is not None:
+        depth, reach = opening
         ry = round(depth * h / 2)
         top = fit.shoulder_row + 1  # the armhole starts right under the shoulder row
         centre = min(top + ry, fit.hem_row)
@@ -261,6 +277,8 @@ def _coverage(index: int, style: str, fit: Fit, w: int, h: int) -> Image.Image:
 def _layers(index: int, style: str, fit: Fit, roles: PaletteRoles, w: int, h: int) -> list[Image.Image]:
     """Ordered RGBA paint layers; ``compose_layers`` clips them to the coverage."""
     shape = _shape(index, style, fit, w, h)
+    if style == "streetwear":
+        return _streetwear_layers(index, fit, roles, shape, w, h)
     top, span = fit.neck_row, shape.span
     base, accent = roles.base, roles.accent
 
@@ -318,4 +336,74 @@ def _layers(index: int, style: str, fit: Fit, roles: PaletteRoles, w: int, h: in
             detail.rect(x0, top, x0 + strap, row(0.2), base)
         band(0.92, 1, base)
     collar(_TRIM[index])
+    return [fabric, detail.result()]
+
+
+_STREET_COLLAR = (0.09, 0.075, 0.06, 0.03, 0.03, 0.03)  # hood ring or rib collar width, of w
+_STREET_CUFF = (0.07, 0.07, 0.07, 0.04, 0.0, 0.0)  # rib cuff depth, of h
+
+
+def _streetwear_layers(
+    index: int, fit: Fit, roles: PaletteRoles, shape: _Shape, w: int, h: int
+) -> list[Image.Image]:
+    """Generic geometric streetwear details: no text, no logos, no third-party artwork."""
+    top, span = fit.neck_row, shape.span
+    base, secondary, accent, highlight = roles.base, roles.secondary, roles.accent, roles.highlight
+    hooded = index <= 2  # very_cold, cold, mild
+    fabric = Image.new("RGBA", (w, h), (*base, 255))
+    detail = _Canvas(w, h, "RGBA")
+    torso_w = shape.right - shape.left
+
+    def row(v):
+        return top + v * span
+
+    def arm_rows(y0, y1, color):  # the part of the sleeve outside the torso
+        for y in range(max(y0, 0), y1 + 1):
+            e, t = fit.extents[y], fit.torso[y]
+            if e is None:
+                continue
+            if t is None:
+                detail.rect(e[0], y, e[1] + 1, y + 1, color)
+            else:
+                detail.rect(e[0], y, t[0], y + 1, color)
+                detail.rect(t[1] + 1, y, e[1] + 1, y + 1, color)
+
+    # colour-block panel: the lower third of the body
+    detail.rect(shape.left, row(0.62), shape.right, row(0.92), secondary)
+    # seams: shoulder yoke and the two side seams
+    detail.line(shape.left, row(0.14), shape.right, row(0.14), 2, accent)
+    for x in (shape.left + 0.18 * torso_w, shape.right - 0.18 * torso_w):
+        detail.line(x, row(0.14), x, row(0.92), 2, accent)
+    if index == 0:  # padded: a quilting line
+        detail.line(shape.left, row(0.46), shape.right, row(0.46), 2, accent)
+    elif index == 1:  # zipped: a centre zip line
+        detail.line(shape.cx, top + shape.dip, shape.cx, row(0.56), 3, accent)
+    if hooded:  # kangaroo pocket over the panel
+        x0, x1 = shape.cx - 0.2 * torso_w, shape.cx + 0.2 * torso_w
+        y0, y1 = row(0.56), row(0.8)
+        detail.rect(x0, y0, x1, y1, accent)
+        detail.rect(x0 + 2, y0 + 2, x1 - 2, y1 - 2, base)
+    if shape.sleeve is not None and index <= 2:  # long sleeves: two stripes
+        start, end = shape.sleeve
+        length = end - start + 1
+        for v, color in ((0.35, accent), (0.5, highlight)):
+            y = start + round(v * length)
+            arm_rows(y, y + max(1, round(0.012 * h)) - 1, color)
+    # generic chest print: three bars of different length
+    bar = max(2, round(0.012 * h))
+    for k, share in enumerate((0.34, 0.24, 0.3)):
+        y = row(0.27) + k * 2.2 * bar
+        half = share * torso_w / 2
+        detail.rect(shape.cx - half, y, shape.cx + half, y + bar, highlight)
+    # rib hem and cuffs
+    detail.rect(shape.left, row(0.92), shape.right, fit.hem_row + 1, accent)
+    if shape.sleeve is not None:
+        end = shape.sleeve[1]
+        arm_rows(end - max(1, round(_STREET_CUFF[index] * h)) + 1, end, accent)
+    # hood ring (secondary) or rib collar (accent); the coverage keeps both below the neck row
+    t = _STREET_COLLAR[index] * w
+    detail.ellipse(shape.cx, top, shape.half + t, shape.dip + t, secondary if hooded else accent)
+    if hooded:  # drawstrings
+        for x in (shape.cx - 0.05 * torso_w, shape.cx + 0.05 * torso_w):
+            detail.line(x, top + shape.dip, x, top + shape.dip + 0.1 * span, 2, highlight)
     return [fabric, detail.result()]

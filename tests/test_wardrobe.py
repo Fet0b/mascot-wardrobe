@@ -635,7 +635,7 @@ class FitAssertions:
         fit = measure_fit(alpha, None if region is None else region.crop(box_px))
         inset = composer.side_inset(style, w)
         dip = composer.dip_rows(index, h)
-        span = composer.sleeve_span(index, fit)
+        span = composer.sleeve_span(index, fit, style)
         gm = garment_mask(source, result).crop(box_px)
         silhouette = alpha.point(lambda v: 255 if v > 127 else 0)
         if region is not None:
@@ -665,7 +665,7 @@ class FitAssertions:
             )
 
         sil_rows = silhouette.tobytes()
-        armhole = composer.ARMHOLES.get(index)
+        armhole = composer.armhole(style, index)
         armhole_rows = round(armhole[0] * h / 2) if armhole else 0
         reach = math.ceil(armhole[1] * w) + 1 if armhole else 0
 
@@ -743,11 +743,14 @@ class FitTests(FitAssertions, unittest.TestCase):
         from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
 
         for name, source, box, region, head in fit_cases():
-            for index, category in enumerate(CATEGORY_NAMES):
-                with self.subTest(case=name, category=category):
-                    brief = OutfitBrief(category, PROBE, (), box, "fit", region=region)
-                    result = LocalComposer().render(source.copy(), brief)
-                    self.assert_fit(source, result, pixel_box(box, source.size), region, index, head=head)
+            for style in ("classic", "streetwear"):
+                for index, category in enumerate(CATEGORY_NAMES):
+                    with self.subTest(case=name, category=category, style=style):
+                        brief = OutfitBrief(category, PROBE, (), box, "fit", style=style, region=region)
+                        result = LocalComposer().render(source.copy(), brief)
+                        self.assert_fit(
+                            source, result, pixel_box(box, source.size), region, index, head=head, style=style
+                        )
 
     def test_prepare_wardrobe_fits_the_real_mascot_in_both_boxes(self):
         from mascot_wardrobe.application import prepare_wardrobe
@@ -831,3 +834,105 @@ class FitTests(FitAssertions, unittest.TestCase):
             manifest.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "template set 2.*regenerate.*new output directory"):
                 WardrobeAgent().generate(mascot, profile, output)
+
+
+PALETTE_3 = ("#101014", "#4920A8", "#9B4DFF", "#DDC5FF")
+
+
+def colour_counts(result, source, colors):
+    """Pixels of the result, inside the garment, that exactly match each colour."""
+    changed = garment_mask(source, result).tobytes()
+    rgb = result.convert("RGB").tobytes()
+    wanted = [tuple(int(c[i : i + 2], 16) for i in (1, 3, 5)) for c in colors]
+    counts = [0] * len(wanted)
+    for i, flag in enumerate(changed):
+        if flag:
+            pixel = tuple(rgb[3 * i : 3 * i + 3])
+            for k, want in enumerate(wanted):
+                counts[k] += pixel == want
+    return counts
+
+
+class StreetwearTests(unittest.TestCase):
+    def render(self, source, category, style, palette=PALETTE_3, box=DEFAULT_BOX, region=None):
+        from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
+
+        brief = OutfitBrief(category, palette, (), box, "style", style=style, region=region)
+        return LocalComposer().render(source, brief)
+
+    def test_six_garments_in_two_styles_with_palette_three(self):
+        source = source_image()
+        box = pixel_box(DEFAULT_BOX, source.size)
+        hashes = {"classic": set(), "streetwear": set()}
+        for category in CATEGORY_NAMES:
+            results = {}
+            for style in hashes:
+                result = self.render(source, category, style)
+                results[style] = result
+                hashes[style].add(hashlib.sha256(result.tobytes()).hexdigest())
+                with self.subTest(category=category, style=style):
+                    self.assertEqual(result.getchannel("A").tobytes(), source.getchannel("A").tobytes())
+                    expected = source.copy()
+                    expected.paste(result.crop(box), box[:2])
+                    self.assertEqual(expected.tobytes(), result.tobytes())
+                    counts = colour_counts(result, source, PALETTE_3)
+                    if style == "streetwear":
+                        self.assertTrue(all(c > 0 for c in counts), counts)
+                    else:  # classic paints the base and accent roles only
+                        self.assertGreater(counts[0], 0)
+                        self.assertGreater(counts[3], 0)
+                        self.assertEqual((counts[1], counts[2]), (0, 0))
+            with self.subTest(category=category):
+                self.assertNotEqual(results["classic"].tobytes(), results["streetwear"].tobytes())
+        self.assertEqual({len(v) for v in hashes.values()}, {6})
+
+    def test_one_and_two_colour_palettes_stay_inside_the_mask(self):
+        for name, source, box, region, _head in fit_cases():
+            for palette in (("#336699",), ("#336699", "#ffcc00")):
+                for category in CATEGORY_NAMES:
+                    with self.subTest(case=name, colours=len(palette), category=category):
+                        result = self.render(source.copy(), category, "streetwear", palette, box, region)
+                        painted = garment_mask(source, result)
+                        px = pixel_box(box, source.size)
+                        self.assertIsNotNone(painted.getbbox())
+                        outside = Image.new("L", source.size, 255)
+                        outside.paste(0, px)
+                        self.assertIsNone(ImageChops.multiply(painted, outside).getbbox())
+                        transparent = source.getchannel("A").point(lambda v: 255 if v == 0 else 0)
+                        self.assertIsNone(ImageChops.multiply(painted, transparent).getbbox())
+                        if region is not None:
+                            unmasked = region.point(lambda v: 255 if v == 0 else 0)
+                            self.assertIsNone(ImageChops.multiply(painted, unmasked).getbbox())
+
+    def test_hood_ring_is_drawn_for_cold_garments_and_never_above_the_neck_row(self):
+        from mascot_wardrobe.wardrobe.fit import measure_fit
+
+        for name, source, box, region, _head in fit_cases():
+            px = pixel_box(box, source.size)
+            fit = measure_fit(source.getchannel("A").crop(px), None if region is None else region.crop(px))
+            for index in (0, 1, 2):
+                with self.subTest(case=name, index=index):
+                    result = self.render(
+                        source.copy(), CATEGORY_NAMES[index], "streetwear", box=box, region=region
+                    )
+                    above = (px[0], px[1], px[2], px[1] + fit.neck_row)
+                    self.assertEqual(result.crop(above).tobytes(), source.crop(above).tobytes())
+                    self.assertGreater(colour_counts(result, source, [PALETTE_3[1]])[0], 0)
+
+    def test_streetwear_geometry_differs_from_classic(self):
+        from mascot_wardrobe.wardrobe import composer
+        from mascot_wardrobe.wardrobe.fit import measure_fit
+
+        source = head_over_body_image()
+        px = pixel_box(SYNTHETIC_BOX, source.size)
+        fit = measure_fit(source.getchannel("A").crop(px), None)
+        w = px[2] - px[0]
+        self.assertLess(composer.side_inset("streetwear", w), composer.side_inset("classic", w))
+        self.assertGreater(
+            composer.sleeve_span(3, fit, "streetwear")[0], composer.sleeve_span(3, fit, "classic")[0]
+        )
+        for index in (4, 5):
+            self.assertGreater(
+                composer.armhole("streetwear", index)[0], composer.armhole("classic", index)[0]
+            )
+        self.assertIsNone(composer.armhole("streetwear", 0))
