@@ -33,6 +33,7 @@ inversion.
 | `mascot_wardrobe.wardrobe.styles` | Style registry (`classic`, `streetwear`), the four palette roles and the deterministic `auto` resolvers. Standard library only. |
 | `mascot_wardrobe.wardrobe.fit` | `measure_fit` and `FitError`: measures the neck, shoulders, torso and hem from the silhouette (and the closet mask) so garments follow the image. |
 | `mascot_wardrobe.interfaces.prompts` | Interactive style and palette prompts with injected input and output; used only by the CLI on a terminal. |
+| `mascot_wardrobe.interfaces.piece` | `run_piece_session`: the interactive `closet piece` loop (one piece at a time, with injected input and output); calls the closet to render and save only that item. |
 | `mascot_wardrobe.channels` | Supporting adapters: `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
 | `mascot_wardrobe.channels.live` (`channels/live.py`) | Opt-in live adapters: `HermesWhatsAppProfileAdapter`, `TelegramBotProfileAdapter`, `telegram_transport`, `publish_to_catalog`. Never used by the sandbox commands. |
 | `mascot_wardrobe.infrastructure` | Supporting adapters: `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
