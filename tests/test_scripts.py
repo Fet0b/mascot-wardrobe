@@ -98,6 +98,15 @@ def test_script_files_are_executable_bash():
         assert script.stat().st_mode & 0o111
 
 
+def test_e2e_redirects_inventory_before_any_installed_cli_command():
+    script = E2E.read_text(encoding="utf-8")
+    redirect = 'export MASCOT_WARDROBE_HOME="$run/home"'
+    assert redirect in script
+    assert script.index(redirect) < script.index('"$cli" --help')
+    assert '"$cli" inventory list --json' in script
+    assert "expected six inventory garments" in script
+
+
 def _find_tool(name: str) -> str | None:
     """Prefer a tool on PATH (CI installs), falling back to the repo .venv (dev checkout)."""
     found = shutil.which(name)

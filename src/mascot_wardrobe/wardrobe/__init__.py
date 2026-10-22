@@ -1,7 +1,8 @@
 """Local deterministic generation: no diffusion, network or remote AI calls.
 
 The normalized body box limits clothing to the body; there is no semantic segmentation.
-Existing transparency is preserved; the background of an opaque PNG is not removed.
+Existing transparency is preserved; the background of an opaque PNG is not removed. A body box
+over a fully opaque PNG cannot be measured and raises ``FitError``; pass an edit mask instead.
 """
 
 from __future__ import annotations
@@ -22,10 +23,20 @@ from PIL import Image
 
 from mascot_wardrobe.wardrobe.composer import (  # noqa: F401
     CATEGORIES,
+    LEGACY_RENDERER_CONFIG,
     LocalComposer,
     OutfitBrief,
     Renderer,
     _validate_brief,
+)
+from mascot_wardrobe.wardrobe.fit import FitError
+from mascot_wardrobe.wardrobe.styles import (
+    AUTO,
+    STYLES,
+    StyleChoice,
+    validate_palette,
+    validate_provenance,
+    validate_style,
 )
 
 # Row order of the 9-row state atlas layout (the exported atlas contract).
@@ -128,6 +139,35 @@ def _validate_request(mascot: Mascot, profile: CountryProfile) -> Path:
     return source_path
 
 
+def _write_manifest(root: Path, target: Path, manifest: dict) -> None:
+    """Atomically replace ``target`` with ``manifest`` (temporary file, fsync, rename)."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=root, prefix=".manifest-", suffix=".tmp", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(manifest, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _checked_choice(choice: StyleChoice | None, profile: CountryProfile) -> StyleChoice:
+    """Re-validate an untrusted choice; ``None`` is the library default (classic, profile palette)."""
+    if choice is None:
+        return StyleChoice("classic", tuple(profile.palette), "default", "profile")
+    return StyleChoice(
+        validate_style(choice.style),
+        validate_palette(choice.palette),
+        validate_provenance(choice.style_choice),
+        validate_provenance(choice.palette_choice),
+    )
+
+
 class WardrobeAgent:
     """One-time wardrobe preparation use case; no recurring inference.
 
@@ -138,8 +178,16 @@ class WardrobeAgent:
     def __init__(self, renderer: Renderer | None = None):
         self.renderer = renderer if renderer is not None else LocalComposer()
 
-    def generate(self, mascot: Mascot, profile: CountryProfile, output_dir: Path) -> Path:
+    def generate(
+        self,
+        mascot: Mascot,
+        profile: CountryProfile,
+        output_dir: Path,
+        *,
+        choice: StyleChoice | None = None,
+    ) -> Path:
         source_path = _validate_request(mascot, profile)
+        choice = _checked_choice(choice, profile)
         root = _safe_root(output_dir)
         try:
             with Image.open(source_path) as image:
@@ -160,7 +208,10 @@ class WardrobeAgent:
             "body_box": list(mascot.body_box),
             "country_code": profile.country_code,
             "thresholds_c": list(profile.thresholds_c),
-            "palette": list(profile.palette),
+            "style": choice.style,
+            "style_choice": choice.style_choice,
+            "palette": list(choice.palette),
+            "palette_choice": choice.palette_choice,
             "garments": list(profile.garments),
             "renderer": f"{type(self.renderer).__module__}.{type(self.renderer).__qualname__}",
         }
@@ -197,8 +248,18 @@ class WardrobeAgent:
         if target.exists():
             try:
                 manifest = json.loads(target.read_text(encoding="utf-8"))
+                stored = manifest["request"]["renderer_config"]
+                if stored == LEGACY_RENDERER_CONFIG and request["renderer_config"] != stored:
+                    raise ValueError(
+                        "This catalog was made by template set 2, which this version cannot reuse: "
+                        "regenerate it into a new output directory."
+                    )
+                provenance = ("style_choice", "palette_choice")
+                stored_request = manifest["request"]
                 if (
-                    any(manifest[key] != value for key, value in metadata.items())
+                    any(manifest[key] != value for key, value in metadata.items() if key != "request")
+                    or {k: v for k, v in stored_request.items() if k not in provenance}
+                    != {k: v for k, v in request.items() if k not in provenance}
                     or not isinstance(manifest["outfits"], list)
                     or len(manifest["outfits"]) != len(CATEGORIES)
                 ):
@@ -221,17 +282,22 @@ class WardrobeAgent:
                             or hashlib.sha256(asset.read_bytes()).hexdigest() != outfit["sha256"][key]
                         ):
                             raise ValueError("Artifact integrity check failed.")
+                if any(stored_request[key] != request[key] for key in provenance):
+                    # Decision 6: only the choice source changed; no re-render, assets untouched.
+                    _write_manifest(root, target, {**manifest, "request": request})
             except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 raise ValueError("Invalid manifest or artifacts.") from exc
             return target
         for value in CATEGORIES:
             brief_text = (
                 f"Country {profile.country_code}; category {value}; "
-                f"palette {', '.join(profile.palette)}; garment instructions: "
+                f"style {choice.style}; palette {', '.join(choice.palette)}; garment instructions: "
                 f"{'; '.join(profile.garments)}. Preserve face and silhouette; "
                 "deterministic local template composition, no semantic diffusion."
             )
-            brief = OutfitBrief(value, profile.palette, profile.garments, mascot.body_box, brief_text)
+            brief = OutfitBrief(
+                value, choice.palette, profile.garments, mascot.body_box, brief_text, style=choice.style
+            )
             _validate_brief(source, brief)
             portrait = self.renderer.render(source.copy(), brief)
             if (
@@ -259,7 +325,6 @@ class WardrobeAgent:
             raise ValueError("The renderer must provide six visibly distinct outfits; check body_box.")
         manifest = {**metadata, "outfits": outfits}
         target = root / "manifest.json"
-        temporary = None
         created = []
         root.mkdir(parents=True, exist_ok=True)
         try:
@@ -275,22 +340,22 @@ class WardrobeAgent:
                         created.append(destination)
                         image.save(handle, format=image_format)
                     outfit["sha256"][key] = hashlib.sha256(destination.read_bytes()).hexdigest()
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=root, prefix=".manifest-", suffix=".tmp", delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                json.dump(manifest, handle, ensure_ascii=False, indent=2)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, target)
+            _write_manifest(root, target, manifest)
         except BaseException:
             for artifact in created:
                 artifact.unlink(missing_ok=True)
             raise
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
         return target
 
 
-__all__ = ["WardrobeAgent", "LocalComposer", "OutfitBrief", "Renderer", "STATE_ROWS"]
+__all__ = [
+    "AUTO",
+    "STYLES",
+    "STATE_ROWS",
+    "FitError",
+    "LocalComposer",
+    "OutfitBrief",
+    "Renderer",
+    "StyleChoice",
+    "WardrobeAgent",
+]

@@ -272,3 +272,17 @@ def test_committed_thumbnails_match_the_real_pipeline(fresh):
     for name in ("assets/contact-sheet.png", "assets/hero.png"):
         with Image.open(ROOT / name) as old, Image.open(fresh[0] / name) as new:
             assert module.stale_portraits(name, old.convert("RGB"), new.convert("RGB")) == []
+
+
+def test_art_pins_the_classic_style_and_the_profile_palette(monkeypatch, tmp_path):
+    module = _load_generator()
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return prepare_wardrobe(*args, **kwargs)
+
+    monkeypatch.setattr(module, "prepare_wardrobe", spy)
+    module.build_catalog(ROOT / "examples" / "mascot.png", tmp_path)
+    assert seen["style"] == "classic"
+    assert seen["palette"] == list(module.load_profile("BR").palette)

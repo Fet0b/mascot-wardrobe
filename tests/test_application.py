@@ -3,9 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
-
 from mascot_wardrobe.infrastructure.policies import load_profile
+from tests.imaging import write_body_png
 
 
 class ApplicationTests(unittest.TestCase):
@@ -19,7 +18,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "sync_sandbox"), "Missing sandbox integration use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         selected = application.select_outfit(manifest, "BR", 25)
         state = self.root / "state"
@@ -38,7 +37,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "export_outfit"), "Missing export integration use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         selected = application.select_outfit(manifest, "BR", 25)
         for channel in ("telegram", "discord", "hermes-cli"):
@@ -54,7 +53,7 @@ class ApplicationTests(unittest.TestCase):
         from mascot_wardrobe import application
 
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         original = json.loads(manifest.read_text())
         original["outfits"][0]["category"] = []
@@ -74,7 +73,7 @@ class ApplicationTests(unittest.TestCase):
 
         self.assertTrue(hasattr(application, "prepare_wardrobe"), "Missing application preparation use case")
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(
             source, "pet", "BR", self.root / "catalog", body_box=(0.2, 0.5, 0.8, 0.9)
         )
@@ -92,7 +91,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertFalse(hasattr(application, "PROJECT_ROOT"))
         self.assertFalse(hasattr(application, "SCRATCH_ROOT"))
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         resolved = application.safe_output(self.root / "plain" / "catalog")
         self.assertTrue(resolved.is_absolute())
         self.assertEqual(resolved, (self.root / "plain" / "catalog").resolve())
@@ -109,3 +108,105 @@ class ApplicationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             application.safe_output(link / "state")
         self.assertEqual(list(real.iterdir()), [])
+
+    def request(self, manifest):
+        return json.loads(Path(manifest).read_text())["request"]
+
+    def test_none_keeps_the_library_default(self):
+        from mascot_wardrobe import application
+
+        source = self.root / "mascot.png"
+        write_body_png(source)
+        request = self.request(application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog"))
+        self.assertEqual(request["style"], "classic")
+        self.assertEqual((request["style_choice"], request["palette_choice"]), ("default", "profile"))
+        self.assertEqual(request["palette"], list(load_profile("BR").palette))
+
+    def test_explicit_style_and_palette_are_persisted(self):
+        from mascot_wardrobe import application
+
+        source = self.root / "mascot.png"
+        write_body_png(source)
+        manifest = application.prepare_wardrobe(
+            source, "pet", "BR", self.root / "catalog", style="streetwear", palette=["#101014", "#4920A8"]
+        )
+        request = self.request(manifest)
+        self.assertEqual(request["style"], "streetwear")
+        self.assertEqual(request["palette"], ["#101014", "#4920A8"])
+        self.assertEqual((request["style_choice"], request["palette_choice"]), ("user", "user"))
+
+    def test_auto_is_resolved_with_the_source_hash_and_country_and_is_repeatable(self):
+        import hashlib
+
+        from mascot_wardrobe import application
+        from mascot_wardrobe.wardrobe.styles import resolve_palette, resolve_style
+
+        source = self.root / "mascot.png"
+        write_body_png(source)
+        seed = hashlib.sha256(source.read_bytes()).hexdigest() + "BR"
+        style, _ = resolve_style("auto", "catalog", seed)
+        palette, _ = resolve_palette("auto", style, "catalog", seed)
+        first = application.prepare_wardrobe(
+            source, "pet", "BR", self.root / "a", style="auto", palette="auto"
+        )
+        request = self.request(first)
+        self.assertEqual(request["style"], style)
+        self.assertEqual(request["palette"], list(palette))
+        self.assertEqual((request["style_choice"], request["palette_choice"]), ("auto", "auto"))
+        second = application.prepare_wardrobe(
+            source, "pet", "BR", self.root / "b", style="auto", palette="auto"
+        )
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        again = application.prepare_wardrobe(
+            source, "pet", "BR", self.root / "a", style="auto", palette="auto"
+        )
+        self.assertEqual(again, first)
+
+    def test_different_style_or_palette_against_the_same_output_is_refused(self):
+        from mascot_wardrobe import application
+
+        source = self.root / "mascot.png"
+        write_body_png(source)
+        out = self.root / "catalog"
+        application.prepare_wardrobe(source, "pet", "BR", out, style="classic", palette=["#101014"])
+        with self.assertRaises(ValueError):
+            application.prepare_wardrobe(source, "pet", "BR", out, style="streetwear", palette=["#101014"])
+        with self.assertRaises(ValueError):
+            application.prepare_wardrobe(source, "pet", "BR", out, style="classic", palette=["#202024"])
+
+    def test_invalid_choices_are_rejected_before_writing(self):
+        from mascot_wardrobe import application
+
+        source = self.root / "mascot.png"
+        write_body_png(source)
+        for style, palette in (
+            ("grunge", "auto"),
+            ("classic", ["auto", "#101014"]),
+            ("classic", ["#12"]),
+            ("classic", []),
+            ("classic", "red"),
+        ):
+            with self.assertRaises(ValueError):
+                application.prepare_wardrobe(
+                    source, "pet", "BR", self.root / "x", style=style, palette=palette
+                )
+            self.assertFalse((self.root / "x").exists())
+
+    def test_unsafe_source_is_rejected_before_it_is_read(self):
+        from unittest.mock import patch
+
+        from mascot_wardrobe import application
+
+        real = self.root / "real.png"
+        write_body_png(real)
+        link = self.root / "link.png"
+        link.symlink_to(real)
+        text = self.root / "mascot.txt"
+        text.write_bytes(b"not a png")
+        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("read before validation")):
+            for source in (link, text):
+                with self.assertRaises(ValueError):
+                    application.prepare_wardrobe(
+                        source, "pet", "BR", self.root / "x", style="auto", palette="auto"
+                    )
+        self.assertFalse((self.root / "x").exists())

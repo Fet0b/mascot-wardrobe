@@ -295,9 +295,17 @@ def build_catalog(mascot_png: Path, workdir: Path) -> list[dict]:
     """Run the real pipeline (BR preset) and return outfits with image, label and range."""
     import json
 
-    manifest = prepare_wardrobe(mascot_png, "mascot", "BR", workdir / "catalog", body_box=EXAMPLE_BODY_BOX)
-    outfits = json.loads(manifest.read_text(encoding="utf-8"))["outfits"]
     profile = load_profile("BR")
+    manifest = prepare_wardrobe(
+        mascot_png,
+        "mascot",
+        "BR",
+        workdir / "catalog",
+        body_box=EXAMPLE_BODY_BOX,
+        style="classic",  # repository art is not interactive: pinned, never chosen automatically
+        palette=list(profile.palette),
+    )
+    outfits = json.loads(manifest.read_text(encoding="utf-8"))["outfits"]
     bounds = profile.thresholds_c
     ranges = (
         [f"below {bounds[0]:g} °C"]

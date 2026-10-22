@@ -4,9 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
-
 from mascot_wardrobe import application
+from tests.imaging import write_body_png
 
 
 class FakeWhatsApp:
@@ -38,7 +37,7 @@ class PublishTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         source = self.root / "mascot.png"
-        Image.new("RGBA", (100, 100), "#555555").save(source)
+        write_body_png(source)
         manifest = application.prepare_wardrobe(source, "pet", "BR", self.root / "catalog")
         self.selection = application.select_outfit(manifest, "BR", 25)
         self.approved = self.root / "approved"

@@ -5,6 +5,10 @@ below exists in the CLI; nothing is installed as a service by this project.
 
 ## What is and is not wired
 
+- `inventory select` resolves only the user's saved range default and changes no gateway,
+  profile or photo. The generic inventory skill is a separate orchestrator template; installing
+  it or connecting its results to publication is outside the inventory commands. See
+  [inventory](inventory.md).
 - `mascot-wardrobe publish` is Wardrobe's own opt-in publisher. It selects one outfit from the
   manifest and, only with `--apply`, delivers the same JPEG to the channels you configure
   (see [channels](channels.md)).
@@ -42,11 +46,12 @@ None of these contact a real account or need credentials. See [verification](ver
 
 ```sh
 mascot-wardrobe generate --mascot examples/mascot.png --id sunny --country BR \
-  --body-box 0.125 0.555 0.875 0.915
+  --body-box 0.125 0.555 0.875 0.915 --style classic --palette auto
 ```
 
 This writes `mascot-wardrobe-out/catalog/manifest.json` and the six outfits locally. Use your
-own mascot and body box for real use (see [wardrobe](wardrobe.md)).
+own mascot and body box for real use (see [wardrobe](wardrobe.md)). `--style` and `--palette` are required when not
+interactive.
 
 ## 4. Dry-run first
 

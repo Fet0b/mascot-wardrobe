@@ -66,6 +66,7 @@ cp "$root/examples/mascot.png" mascot.png
 
 # Any accidental network use from the CLI would fail against this dead loopback proxy.
 export HTTP_PROXY="http://127.0.0.1:9" HTTPS_PROXY="http://127.0.0.1:9" NO_PROXY=""
+export MASCOT_WARDROBE_HOME="$run/home"
 
 snapshot() { # hashes and mtimes of every file below $1
   (
@@ -84,16 +85,24 @@ step "mascot-wardrobe --help"
 
 step "generate twice, compare hashes and mtimes"
 box="0.125 0.555 0.875 0.915"  # the example mascot's explicit body box, same as the README quickstart
-"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box >/dev/null
+"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box --style classic --palette auto >/dev/null
 catalog="mascot-wardrobe-out/catalog"
 manifest="$catalog/manifest.json"
 snapshot "$catalog" >"$run/gen1.txt"
 sleep 1.1
-"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box >/dev/null
+"$cli" generate --mascot mascot.png --id sunny --country BR --body-box $box --style classic --palette auto >/dev/null
 snapshot "$catalog" >"$run/gen2.txt"
 cmp "$run/gen1.txt" "$run/gen2.txt" || fail "second generate changed hashes or mtimes"
 [ "$(ls "$catalog"/*.png "$catalog"/*.jpg | wc -l)" -eq 18 ] || fail "expected 18 outfit images"
 echo "generate is idempotent: $(grep -c . "$run/gen1.txt") lines identical"
+
+step "persistent inventory contains six garments after repeated generation"
+"$cli" inventory list --json >"$run/inventory.json"
+"$py" -c 'import json, sys
+items = json.load(open(sys.argv[1]))
+assert len(items) == 6, "expected six inventory garments"
+assert [item["number"] for item in items] == list(range(1, 7)), "inventory numbers changed"
+' "$run/inventory.json"
 
 step "select one outfit per category, plus Fahrenheit"
 check_select() { # temperature unit expected-category
