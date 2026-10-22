@@ -464,3 +464,44 @@ def test_closet_batch_metadata_refresh_reports_updated_and_repeat_reports_skippe
     before = (store.root / "inventory.json").read_bytes()
     assert register_closet(closet, store) == {"imported": [], "skipped": [1]}
     assert (store.root / "inventory.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("revision, items_dir", [(2, "items"), (3, "items"), (3, "items-t3")])
+def test_real_closet_migration_repins_only_matching_inventory_hash(tmp_path, revision, items_dir):
+    from mascot_wardrobe.application.inventory import register_closet
+    from mascot_wardrobe.closet import Closet
+
+    store = store_at(tmp_path)
+    closet = make_closet(tmp_path)
+    path = closet.item_path("coat")
+    old = Image.open(path).convert("RGBA")
+    old.putpixel((40, 120), (1, 2, 3, 255))  # a valid masked pixel from a prior renderer
+    old.save(path)
+    data = json.loads((closet.root / "closet.json").read_text())
+    data["items"]["coat"]["sha256"] = digest(path)
+    (closet.root / "closet.json").write_text(json.dumps(data))
+    closet = Closet.open(closet.root)
+    register_closet(closet, store, item_id="coat", ranges=("warm",))
+    previous = closet.items()["coat"]["sha256"]
+    data["renderer"] = {"renderer": "local-composer", "templates": revision}
+    if revision == 3:
+        data["renderer"]["styles"] = ["classic", "streetwear"]
+    if items_dir != "items":
+        (closet.root / "items").rename(closet.root / items_dir)
+        data["items_dir"] = items_dir
+        data["items"]["coat"]["file"] = f"{items_dir}/coat.png"
+    (closet.root / "closet.json").write_text(json.dumps(data))
+    Closet.migrate(closet.root)
+    migrated = Closet.open(closet.root)
+    assert migrated.items()["coat"]["migrated_from"]["sha256"] == previous
+    before = (store.root / "inventory.json").read_bytes()
+    migrated._data["items"]["coat"]["migrated_from"]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="collision"):
+        register_closet(migrated, store)
+    assert (store.root / "inventory.json").read_bytes() == before
+    migrated._data["items"]["coat"]["migrated_from"]["sha256"] = previous
+    assert register_closet(migrated, store) == {"imported": [], "skipped": [], "updated": [1]}
+    garment = store.read().describe(1)
+    assert garment.version == 2
+    assert "warm" in garment.ranges
+    assert register_closet(migrated, store) == {"imported": [], "skipped": [1]}

@@ -1,6 +1,7 @@
 """Local deterministic generation: no diffusion, network or remote AI calls.
 
-The normalized body box limits clothing to the body; there is no semantic segmentation.
+The normalized body box limits torso clothing; streetwear shoes use conservative alpha-only
+foot interiors. There is no semantic segmentation.
 Existing transparency is preserved; the background of an opaque PNG is not removed. A body box
 over a fully opaque PNG cannot be measured and raises ``FitError``; pass an edit mask instead.
 """
@@ -24,16 +25,19 @@ from PIL import Image
 from mascot_wardrobe.wardrobe.composer import (  # noqa: F401
     CATEGORIES,
     LEGACY_RENDERER_CONFIG,
+    PRIOR_RENDERER_CONFIGS,
     LocalComposer,
     OutfitBrief,
     Renderer,
     _validate_brief,
 )
+from mascot_wardrobe.wardrobe.feet import shoe_overlay
 from mascot_wardrobe.wardrobe.fit import FitError
 from mascot_wardrobe.wardrobe.styles import (
     AUTO,
     STYLES,
     StyleChoice,
+    palette_roles,
     validate_palette,
     validate_provenance,
     validate_style,
@@ -249,9 +253,10 @@ class WardrobeAgent:
             try:
                 manifest = json.loads(target.read_text(encoding="utf-8"))
                 stored = manifest["request"]["renderer_config"]
-                if stored == LEGACY_RENDERER_CONFIG and request["renderer_config"] != stored:
+                if stored in PRIOR_RENDERER_CONFIGS and request["renderer_config"] != stored:
                     raise ValueError(
-                        "This catalog was made by template set 2, which this version cannot reuse: "
+                        f"This catalog was made by template set {stored['templates']}, "
+                        "which this version cannot reuse: "
                         "regenerate it into a new output directory."
                     )
                 provenance = ("style_choice", "palette_choice")
@@ -309,7 +314,14 @@ class WardrobeAgent:
                     f"Renderer omitted or invalidated category {value}: expected a source-size RGBA portrait."
                 )
             box = tuple(int(v * n) for v, n in zip(mascot.body_box, source.size * 2, strict=True))
+            # The sole outside-box exception is the exact deterministic foot pass.
+            # Recompute it independently so a renderer cannot use feet as permission to
+            # change any other pixels, or paint arbitrary content inside the foot masks.
             expected = source.copy()
+            if isinstance(self.renderer, LocalComposer) and choice.style == "streetwear":
+                expected = Image.alpha_composite(
+                    expected, shoe_overlay(source.getchannel("A"), palette_roles(choice.palette))
+                )
             expected.paste(portrait.crop(box), box)
             if expected.tobytes() != portrait.tobytes():
                 raise ValueError(f"Renderer changed pixels outside the body box in category {value}.")

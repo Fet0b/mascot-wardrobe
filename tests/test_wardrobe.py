@@ -643,8 +643,15 @@ class FitAssertions:
             silhouette = ImageChops.multiply(silhouette, kept)
         label = f"category {index}"
 
-        # protected pixels: nothing outside the box, nothing above the neck, no head pixel
+        # Protected pixels: only the exact shoe pass may extend outside the torso box.
         expected = source.copy()
+        if style == "streetwear":
+            from mascot_wardrobe.wardrobe.feet import shoe_overlay
+            from mascot_wardrobe.wardrobe.styles import palette_roles
+
+            expected = Image.alpha_composite(
+                expected, shoe_overlay(source.getchannel("A"), palette_roles(PROBE), region)
+            )
         expected.paste(result.crop(box_px), (x0, y0))
         self.assertEqual(expected.tobytes(), result.tobytes(), f"{label}: pixels outside the box changed")
         self.assertEqual(
@@ -813,12 +820,12 @@ class FitTests(FitAssertions, unittest.TestCase):
         result = LocalComposer().render(opaque, OutfitBrief("cold", PROBE, (), box, "t", region=mask))
         self.assertIsNotNone(garment_mask(opaque, result).getbbox())
 
-    def test_cache_config_is_template_revision_three(self):
+    def test_cache_config_is_template_revision_four(self):
         from mascot_wardrobe.wardrobe import LocalComposer
 
         self.assertEqual(
             LocalComposer.cache_config,
-            {"renderer": "local-composer", "templates": 3, "styles": ["classic", "streetwear"]},
+            {"renderer": "local-composer", "templates": 4, "styles": ["classic", "streetwear"]},
         )
 
     def test_a_templates_two_manifest_is_rejected_with_a_regenerate_message(self):
@@ -835,8 +842,34 @@ class FitTests(FitAssertions, unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "template set 2.*regenerate.*new output directory"):
                 WardrobeAgent().generate(mascot, profile, output)
 
+    def test_a_templates_three_manifest_is_rejected_with_a_regenerate_message(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        with tempfile.TemporaryDirectory() as temporary:
+            mascot, profile = AgentTests().fixture(Path(temporary))
+            output = Path(temporary) / "out"
+            manifest = WardrobeAgent().generate(mascot, profile, output)
+            data = json.loads(manifest.read_text())
+            data["request"]["renderer_config"] = {
+                "renderer": "local-composer",
+                "templates": 3,
+                "styles": ["classic", "streetwear"],
+            }
+            manifest.write_text(json.dumps(data))
+            before = manifest.read_bytes()
+            with self.assertRaisesRegex(ValueError, "template set 3.*regenerate.*new output directory"):
+                WardrobeAgent().generate(mascot, profile, output)
+            self.assertEqual(manifest.read_bytes(), before)
+
 
 PALETTE_3 = ("#101014", "#4920A8", "#9B4DFF", "#DDC5FF")
+
+
+def expected_footwear(source, palette, region):
+    from mascot_wardrobe.wardrobe.feet import shoe_overlay
+    from mascot_wardrobe.wardrobe.styles import palette_roles
+
+    return Image.alpha_composite(source, shoe_overlay(source.getchannel("A"), palette_roles(palette), region))
 
 
 def colour_counts(result, source, colors):
@@ -897,14 +930,17 @@ class StreetwearTests(unittest.TestCase):
                         self.assertIsNotNone(painted.getbbox())
                         outside = Image.new("L", source.size, 255)
                         outside.paste(0, px)
-                        self.assertIsNone(ImageChops.multiply(painted, outside).getbbox())
+                        expected_shoes = expected_footwear(source, palette, region)
+                        self.assertIsNone(
+                            ImageChops.multiply(garment_mask(expected_shoes, result), outside).getbbox()
+                        )
                         transparent = source.getchannel("A").point(lambda v: 255 if v == 0 else 0)
                         self.assertIsNone(ImageChops.multiply(painted, transparent).getbbox())
                         if region is not None:
                             unmasked = region.point(lambda v: 255 if v == 0 else 0)
                             self.assertIsNone(ImageChops.multiply(painted, unmasked).getbbox())
 
-    def test_hood_ring_is_drawn_for_cold_garments_and_never_above_the_neck_row(self):
+    def test_cold_garment_details_never_paint_above_the_neck_row(self):
         from mascot_wardrobe.wardrobe.fit import measure_fit
 
         for name, source, box, region, _head in fit_cases():
@@ -939,7 +975,7 @@ class StreetwearTests(unittest.TestCase):
 
 
 class StreetwearDistinctionTests(unittest.TestCase):
-    """Each template has its own colour-block construction, not one shared layer stack."""
+    """Black fabric dominates; each garment carries its own restrained details."""
 
     ROLES = {"base": 0, "secondary": 1, "highlight": 2, "accent": 3}  # indexes into PALETTE_3
 
@@ -954,13 +990,13 @@ class StreetwearDistinctionTests(unittest.TestCase):
         counts = colour_counts(result, source, PALETTE_3)
         return {role: counts[i] / area for role, i in self.ROLES.items()}
 
-    def test_every_template_fills_large_areas_with_several_palette_roles(self):
+    def test_every_template_has_dominant_base_and_small_light_details(self):
         for name, source, box, region, _head in fit_cases():
             for category in CATEGORY_NAMES:
                 with self.subTest(case=name, category=category):
                     shares = self.shares(source, self.render(source.copy(), category, box, region))
-                    blocks = [role for role in ("base", "secondary", "highlight") if shares[role] >= 0.06]
-                    self.assertGreaterEqual(len(blocks), 2, shares)
+                    self.assertGreaterEqual(shares["base"], 0.65, shares)
+                    self.assertLess(shares["accent"], 0.06, shares)
 
     def test_templates_are_not_near_duplicates(self):
         for name, source, box, region, _head in fit_cases():
@@ -970,6 +1006,12 @@ class StreetwearDistinctionTests(unittest.TestCase):
                     with self.subTest(case=name, pair=(first, second)):
                         a, b = renders[first], renders[second]
                         both = ImageChops.multiply(garment_mask(source, a), garment_mask(source, b))
+                        base = Image.new("RGB", a.size, (16, 16, 20))
+                        decorated = ImageChops.lighter(
+                            ImageChops.difference(a.convert("RGB"), base).convert("L"),
+                            ImageChops.difference(b.convert("RGB"), base).convert("L"),
+                        ).point(lambda v: 255 if v else 0)
+                        both = ImageChops.multiply(both, decorated)
                         shared = both.histogram()[255]
                         differs = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
                         differs = ImageChops.multiply(
@@ -977,12 +1019,9 @@ class StreetwearDistinctionTests(unittest.TestCase):
                         )
                         self.assertGreater(differs.histogram()[255] / shared, 0.2)
 
-    def test_templates_do_not_share_one_colour_distribution(self):
+    def test_templates_have_distinct_colour_layouts(self):
         source = source_image()
-        profiles = {
-            tuple(round(v, 1) for v in self.shares(source, self.render(source.copy(), c)).values())
-            for c in CATEGORY_NAMES
-        }
+        profiles = {self.render(source.copy(), c).tobytes() for c in CATEGORY_NAMES}
         self.assertEqual(len(profiles), 6)
 
     def test_lines_stay_and_protected_pixels_are_untouched(self):
@@ -992,14 +1031,18 @@ class StreetwearDistinctionTests(unittest.TestCase):
                 with self.subTest(case=name, category=category):
                     result = self.render(source.copy(), category, box, region)
                     accent = colour_counts(result, source, [PALETTE_3[3]])[0]
-                    self.assertGreater(accent, 0)  # seams, zips and rib lines remain
+                    self.assertGreater(accent, 0)  # each design retains a small light detail
                     transparent = source.getchannel("A").point(lambda v: 255 if v == 0 else 0)
                     self.assertIsNone(
                         ImageChops.multiply(garment_mask(source, result), transparent).getbbox()
                     )
                     outside = Image.new("L", source.size, 255)
                     outside.paste(0, px)
-                    self.assertIsNone(ImageChops.multiply(garment_mask(source, result), outside).getbbox())
+                    self.assertIsNone(
+                        ImageChops.multiply(
+                            garment_mask(expected_footwear(source, PALETTE_3, region), result), outside
+                        ).getbbox()
+                    )
                     if region is not None:
                         unmasked = region.point(lambda v: 255 if v == 0 else 0)
                         self.assertIsNone(

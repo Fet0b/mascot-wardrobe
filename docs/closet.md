@@ -26,12 +26,12 @@ closet/
   mascot/source.png    the immutable mascot (verbatim copy)
   mask/edit-mask.png   the explicit edit mask (verbatim copy)
   items/<id>.png       saved item portraits (same size as the mascot)
-  items-t3/<id>.png    item portraits after `closet migrate` (see below); `items_dir` names the live one
-  backups/             closet-templates-2-<n>.json, written by `closet migrate`
+  items-t4/<id>.png    item portraits after `closet migrate` (see below); `items_dir` names the live one
+  backups/             closet-templates-<old-revision>-<n>.json, written by `closet migrate`
   catalog/<name>.png   contact sheet; catalog/<name>.json lists its tiles
 ```
 
-`closet.json` pins the mascot and mask hashes, the renderer `cache_config` (`templates: 3`), the
+`closet.json` pins the mascot and mask hashes, the renderer `cache_config` (`templates: 4`), the
 `items_dir`, and per item its template, `style`, `palette`, the provenance of each
 (`style_choice`, `palette_choice`), `version` and file hash. Every command re-hashes mascot, mask and all items
 and fails with `changed ... sha256 mismatch` (exit code 2) if anything differs, so a swapped base
@@ -202,7 +202,7 @@ Two different fingerprints are involved, on purpose:
 
 ## Upgrading an older closet
 
-A closet made by the previous renderer (`templates: 2`) cannot be opened by this version: the
+A closet made by the supported prior renderers (`templates: 2` or `templates: 3`) cannot be opened by this version: the
 error points to `closet migrate`.
 
 ```
@@ -211,21 +211,27 @@ mascot-wardrobe closet --root DIR migrate
 ```
 
 - Preserved: item ids, names, descriptions, templates, palettes, versions, wardrobes, the mascot,
-  the mask and their hashes. Items become `classic` with provenance `migrated` for style and
-  palette, and are re-rendered with the new fit, so item hashes change. Each wardrobe is repinned
+  the mask and their hashes. Revision-2 items become `classic` with provenance `migrated` for style and
+  palette. Revision-3 items retain their style and both choice provenances. All items are
+  re-rendered, so item hashes can change; `migrated_from` pins the actual prior renderer and hash. Each wardrobe is repinned
   to the new hashes and its `revision` goes up by one.
-- The old `closet.json` is copied first to `backups/closet-templates-2-<n>.json` (never
-  overwriting an earlier backup). New items are written to `items-t3/`; the old `items/` and
-  `catalog/` are left untouched.
+- The old `closet.json` is copied first to `backups/closet-templates-<old-revision>-<n>.json` (never
+  overwriting an earlier backup). New items are written to `items-t4/`; the old `items/` or `items-t3/` and
+  `catalog/` are left untouched. Only the known prior renderer configurations are accepted;
+  revision 2 requires `items/`, while revision 3 accepts `items/` or `items-t3/`.
 - Atomic: `closet.json` is replaced once, after the new items are written and verified in memory.
   If the final re-open check fails, the original `closet.json` is restored. An interrupted run
-  leaves the old `closet.json` live, and the next run overwrites leftovers in `items-t3/`.
+  leaves the old `closet.json` live, and the next run overwrites leftovers in `items-t4/`.
 - Refused, with nothing changed: a tampered old item, a changed mascot or mask, an unknown renderer
   configuration, or wardrobes that do not match their items. A closet that is already current
   reports "already current"; running `migrate` twice is a no-op the second time.
 - Catalog sheets made before the migration are stale; rebuild them with `closet catalog`.
-- The same applies to `generate`: a `templates: 2` catalog is rejected; regenerate into a new
+- The same applies to `generate`: a `templates: 2` or `templates: 3` catalog is rejected; regenerate into a new
   output directory.
+
+Streetwear sneakers use source-alpha foot detection independently of the torso fit and still
+respect the explicit mask. A mask that protects the feet adds no shoes; include foot interiors
+in the mask only when they are editable. No mask is generated automatically.
 
 ## Not in this MVP
 
