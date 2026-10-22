@@ -309,3 +309,30 @@ class ClosetChoiceCLITests(ClosetCLIBase):
         code, out, err = self.interactive(["2"], "edit", "coat", "--style", "streetwear")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)["palette_choice"], "auto")  # only the palette was asked
+
+
+class ClosetMigrateCLITests(ClosetCLIBase):
+    def legacy(self):
+        self.closet_cmd("init", "--mascot", self.base / "m.png", "--mask", self.base / "mask.png")
+        self.closet_cmd("add", "coat", "--template", "cold", "--style", "classic", "--palette", "#2878b5")
+        path = self.closet / "closet.json"
+        data = json.loads(path.read_text())
+        data["renderer"] = {"renderer": "local-composer", "templates": 2}
+        for key in ("style", "style_choice", "palette_choice"):
+            data["items"]["coat"].pop(key)
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_open_message_then_dry_run_then_migrate(self):
+        path = self.legacy()
+        result = self.closet_cmd("list", ok=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("migrate", result.stderr)
+        original = path.read_bytes()
+        plan = self.closet_cmd("migrate", "--dry-run")
+        self.assertEqual((plan["migrated"], plan["dry_run"], plan["items"]), (False, True, ["coat"]))
+        self.assertEqual(path.read_bytes(), original)
+        report = self.closet_cmd("migrate")
+        self.assertTrue(report["migrated"])
+        self.assertEqual(self.closet_cmd("list")["items"]["coat"]["style_choice"], "migrated")
+        self.assertEqual(self.closet_cmd("migrate"), {"migrated": False, "reason": "already current"})

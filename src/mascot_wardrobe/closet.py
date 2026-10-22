@@ -292,6 +292,99 @@ class Closet:
         closet.verify()
         return closet
 
+    @classmethod
+    def migrate(cls, root, *, dry_run=False) -> dict:
+        """Upgrade a template-set-2 closet to the current renderer; ``closet.json`` is the commit point.
+
+        Items are re-rendered as ``classic`` into ``items-t3/`` with the stored template and palette;
+        the old ``items/`` and ``catalog/`` are never touched, and the original ``closet.json`` is
+        kept under ``backups/``. Nothing is written when the plan is refused or ``dry_run`` is set.
+        """
+        root = _safe_root(Path(root))
+        original = _read_file(root / "closet.json", "closet.json")
+        try:
+            data = json.loads(original.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("closet.json is not valid JSON.") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(f"Unsupported closet schema; this version reads schema {SCHEMA_VERSION}.")
+        current = json.loads(json.dumps(LocalComposer.cache_config))
+        if data.get("renderer") == current:
+            return {"migrated": False, "reason": "already current"}
+        if data.get("renderer") != LEGACY_RENDERER_CONFIG:
+            raise ValueError("Cannot migrate: the closet renderer configuration is not a known legacy one.")
+        if data.get("items_dir", DEFAULT_ITEMS_DIR) != DEFAULT_ITEMS_DIR:
+            raise ValueError("Cannot migrate: a legacy closet must use the 'items' directory.")
+        legacy = cls(root, data)
+        legacy.verify(renderer_check=False)
+        wardrobes = data.get("wardrobes")
+        if not isinstance(wardrobes, dict):
+            raise ValueError("closet.json wardrobes must be an object.")
+        for name, wardrobe in wardrobes.items():
+            _name(name, "wardrobe name")
+            if not isinstance(wardrobe, dict) or not isinstance(wardrobe.get("items"), list):
+                raise ValueError(f"Wardrobe {name} is malformed.")
+            for entry in wardrobe["items"]:
+                item = data["items"].get(entry.get("id")) if isinstance(entry, dict) else None
+                if item is None or (item["version"], item["sha256"]) != (
+                    entry.get("version"),
+                    entry.get("sha256"),
+                ):
+                    raise ValueError(f"Wardrobe {name} does not match its items; fix it before migrating.")
+        catalog = root / "catalog"
+        stale = sorted(f"catalog/{p.name}" for p in catalog.glob("*.png")) if catalog.is_dir() else []
+        plan = {"items": sorted(data["items"]), "wardrobes": sorted(wardrobes), "stale_catalogs": stale}
+        if dry_run:
+            return {"migrated": False, "dry_run": True, **plan}
+        new_dir = f"items-t{current['templates']}"
+        _items_dir(new_dir)
+        if (root / new_dir).is_symlink():
+            raise ValueError(f"{new_dir} cannot be a symbolic link.")
+        backups = root / "backups"
+        number = 1
+        while (backups / f"closet-templates-2-{number}.json").exists():
+            number += 1
+        backup = backups / f"closet-templates-2-{number}.json"
+        _write_atomic(backup, original)
+        if _sha256_bytes(_read_file(backup, "The backup")) != _sha256_bytes(original):
+            raise ValueError("The backup does not match closet.json; migration stopped.")
+        source, mask = legacy._load_identity(renderer_check=False)
+        old_hash = _sha256_bytes(original)
+        new = json.loads(json.dumps(data))
+        new["renderer"] = current
+        new["items_dir"] = new_dir
+        hashes = {}
+        for item_id, record in data["items"].items():
+            meta = _with_metadata(item_id, record)
+            rendered = legacy._render(source, mask, meta["template"], tuple(meta["palette"]), DEFAULT_STYLE)
+            _write_atomic(root / new_dir / f"{_name(item_id, 'item id')}.png", rendered)
+            hashes[item_id] = _sha256_bytes(rendered)
+            new["items"][item_id] = {
+                "name": meta["name"],
+                "description": meta["description"],
+                "template": meta["template"],
+                "style": DEFAULT_STYLE,
+                "style_choice": "migrated",
+                "palette": list(meta["palette"]),
+                "palette_choice": "migrated",
+                "version": meta["version"],
+                "file": f"{new_dir}/{item_id}.png",
+                "sha256": hashes[item_id],
+                "migrated_from": {"renderer": LEGACY_RENDERER_CONFIG, "sha256": record["sha256"]},
+            }
+        for wardrobe in new["wardrobes"].values():
+            wardrobe["revision"] += 1
+            for entry in wardrobe["items"]:
+                entry["sha256"] = hashes[entry["id"]]
+        cls(root, new).verify()  # the in-memory state against the files already written
+        _write_atomic(root / "closet.json", json.dumps(new, indent=2, sort_keys=True).encode())
+        try:
+            cls.open(root)
+        except Exception as exc:
+            _write_atomic(root / "closet.json", original)
+            raise ValueError(f"Migration failed verification and was rolled back: {exc}") from exc
+        return {"migrated": True, "backup": str(backup), "backup_sha256": old_hash, **plan}
+
     # -- paths and read access ----------------------------------------------------------------
 
     @property
@@ -325,7 +418,7 @@ class Closet:
 
     # -- verification -------------------------------------------------------------------------
 
-    def _load_identity(self):
+    def _load_identity(self, *, renderer_check=True):
         """Re-read the pinned mascot and mask from disk and prove they are the recorded ones."""
         mascot = _read_file(self.source_path, "The mascot source")
         if _sha256_bytes(mascot) != self._data["mascot"]["sha256"]:
@@ -333,7 +426,7 @@ class Closet:
         mask = _read_file(self.mask_path, "The edit mask")
         if _sha256_bytes(mask) != self._data["mask"]["sha256"]:
             raise ValueError("The edit mask changed: sha256 mismatch with the closet record.")
-        if self._data["renderer"] != json.loads(json.dumps(LocalComposer.cache_config)):
+        if renderer_check and self._data["renderer"] != json.loads(json.dumps(LocalComposer.cache_config)):
             if self._data["renderer"] == LEGACY_RENDERER_CONFIG:
                 raise ValueError(
                     "This closet was made by template set 2; upgrade it with: "
@@ -344,7 +437,7 @@ class Closet:
         edit, _ = _binary_mask(_decode(mask, "The edit mask", "L"))
         return source, edit
 
-    def verify(self) -> None:
+    def verify(self, *, renderer_check=True) -> None:
         """Raise ValueError unless mascot, mask and every item still match their records."""
         if not isinstance(self._data["items"], dict):
             raise ValueError("closet.json items must be an object.")
@@ -352,7 +445,7 @@ class Closet:
         for item_id, item in self._data["items"].items():
             _check_record_labels(item_id, item)
             _check_record_choices(item_id, item)
-        source, mask = self._load_identity()
+        source, mask = self._load_identity(renderer_check=renderer_check)
         for item_id, item in self._data["items"].items():
             if "file" in item and item["file"] != self._asset(item_id):
                 raise ValueError(

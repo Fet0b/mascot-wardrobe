@@ -230,6 +230,11 @@ def _closet_parser(commands):
     use.add_argument("name")
     catalog = actions.add_parser("catalog", help="Build a catalog sheet from saved item assets")
     catalog.add_argument("--wardrobe", help="Wardrobe name (default: the active one)")
+    migrate = actions.add_parser(
+        "migrate",
+        help="Upgrade a template-set-2 closet to the current renderer (keeps a backup; atomic)",
+    )
+    migrate.add_argument("--dry-run", action="store_true", help="Show the plan; write nothing")
     actions.add_parser("list", help="Show items, wardrobes and the active wardrobe")
     actions.add_parser("verify", help="Check mascot, mask and items against their recorded sha256")
 
@@ -244,6 +249,8 @@ def _closet(args, interactive=False, read=input):
             "mascot_sha256": closet._data["mascot"]["sha256"],
             "mask_sha256": closet._data["mask"]["sha256"],
         }
+    if args.action == "migrate":
+        return Closet.migrate(args.root, dry_run=args.dry_run)
     style = palette = None
     if args.action in ("add", "edit"):
         style, palette = _choices(args, interactive, read, keep=args.action == "edit")
