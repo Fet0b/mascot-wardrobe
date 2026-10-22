@@ -47,6 +47,7 @@ accounts) is supported.
 # plus the atlas path for the Hermes pet. No network, no writes.
 mascot-wardrobe publish --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
   --temperature 22 --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header "Name: value" \
   --telegram --telegram-expected-bot-id 123456789
 
@@ -69,6 +70,9 @@ attempted and reported), 2 for invalid configuration.
   `--whatsapp-catalog-dir` at that directory explicitly; there is no default and the project
   never points at a live directory by itself. The slug is validated, symbolic links are
   refused, and the file is copied atomically (identical bytes are not rewritten).
+- `--whatsapp-state-dir` stores the backup, lock and sync record separately from the catalog.
+  It defaults to `mascot-wardrobe-out/whatsapp-state`; choose a directory with appropriate
+  local permissions.
 - The request carries only `{"slug": ...}`. No JID, path, URL or image bytes are sent, and no
   `Origin` header. The header your bridge requires is passed as `--whatsapp-bridge-header
   "Name: value"` or the `MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER` environment variable; it is a

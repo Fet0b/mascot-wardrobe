@@ -16,6 +16,8 @@
 # Test first, with no --apply (a dry-run prints the plan and writes nothing):
 #   mascot-wardrobe publish-closet --closet-root /path/to/closet --wardrobe my-looks --country BR \
 #     --state-file /path/to/weather/state.json
+#     --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+#     --whatsapp-state-dir /path/to/private/whatsapp-state
 # Optional: --overlay /path/to/your-overlay.png (square RGBA PNG you supply; it is clipped to the
 # circular-safe area) and --background '#102b32'.
 # Existing-service review (requires separate approval; do not install this file automatically):
@@ -42,4 +44,5 @@ ExecStart=/path/to/venv/bin/mascot-wardrobe publish-closet \
   --closet-root /path/to/closet --wardrobe my-looks --country BR \
   --state-file /path/to/weather/state.json \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000

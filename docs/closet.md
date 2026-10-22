@@ -242,6 +242,7 @@ but applying it requires the complete settings below. No timer is wired or activ
 mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR \
   --state-file /path/to/weather/state.json \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header 'X-Example: 1'
 
 # Manual temperature instead of a state file (Celsius, or --unit F)
@@ -264,9 +265,13 @@ mascot-wardrobe publish-closet ... --apply
 - **Slug**: `closet-<wardrobe>-<item id>`, checked against the bridge's own slug rule before any
   write. Closet names are lowercase letters, digits and hyphens only (up to 40 characters), so an
   id containing an underscore is refused when the closet opens.
-- **WhatsApp apply**: needs the three `--whatsapp-*` settings; the existing adapter reads the photo back
-  and reports `updated` or `unchanged` (a repeat run changes nothing). Exit 1 if the bridge
-  fails. There is no Telegram option and nothing touches a local pet.
+- **WhatsApp apply**: needs `--whatsapp-catalog-dir`, the bridge URL and header. The state
+  directory defaults to `mascot-wardrobe-out/whatsapp-state` and can be set with
+  `--whatsapp-state-dir`. The catalog contains the selected root-level JPEG; backups, lock and
+  sync state stay in the separate state directory. The adapter reads the photo back and reports
+  `updated` or `unchanged` (a repeat run changes nothing). A bridge preflight failure is reported
+  as failed JSON and exits 1 before changing a profile. There is no Telegram option and nothing
+  touches a local pet.
 
 **This CLI feature does not activate any timer.** Installing it never schedules anything; the
 only scheduler artifact is the uninstalled `examples/closet-weather/` template (see

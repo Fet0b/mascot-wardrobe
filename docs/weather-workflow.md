@@ -24,6 +24,7 @@ workflow (`generate` / `select` / `publish`) stays available and unchanged.
 mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR \
   --state-file /path/to/weather/state.json \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000
 ```
 
@@ -101,6 +102,7 @@ mascot-wardrobe weather-run --country BR --state-file /path/to/weather/state.jso
 # The private bridge header comes from MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER.
 mascot-wardrobe publish-closet --country BR --state-file /path/to/weather/state.json \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000 --apply
 
 # Active Hermes PetDex pet only, with no WhatsApp configuration or bridge/network calls:
@@ -157,8 +159,9 @@ expiry restores both plain outputs. No overlay is shipped or added when none is 
 In scope: selecting from a saved wardrobe by weather, a deterministic profile JPEG, dry-run by
 default, collection management, a separate gateway selection, active local Hermes PetDex selection, and an
 opt-in WhatsApp own-profile update with GET first, one original-photo backup before first POST,
-three readback polls, locking and atomic last-good state. CLI sync state lives under
-`<approved-catalog>/.avatar-sync`; reuse it for the same connected account. Python adapters require
+three readback polls, locking and atomic last-good state. CLI sync state defaults to
+`mascot-wardrobe-out/whatsapp-state` and can be changed with `--whatsapp-state-dir`, separate
+from the approved catalog. Reuse it for the same connected account. Python adapters require
 an explicit state directory. Failed verification leaves last-good bytes unchanged; the remote
 photo may still have changed. The bridge cannot restore arbitrary backup bytes by slug.
 

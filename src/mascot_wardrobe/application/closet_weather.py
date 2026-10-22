@@ -25,6 +25,14 @@ DEFAULT_MAX_AGE = timedelta(hours=3)  # same freshness window as the live Open-M
 MAX_FUTURE = timedelta(minutes=15)
 
 
+class ClosetWeatherPreflightError(RuntimeError):
+    """Preflight failure with a structured report for the CLI boundary."""
+
+    def __init__(self, message, report):
+        super().__init__(message)
+        self.report = report
+
+
 @dataclass(frozen=True)
 class StateReading:
     temperature_c: float
@@ -227,7 +235,18 @@ def publish_closet_look(
                 staged = Path(staging) / (look["slug"] + ".jpg")
                 staged.write_bytes(jpeg)
                 selection = {"slug": look["slug"], "category": look["category"], "jpg": str(staged)}
-                deliver = stack.enter_context(prepare_whatsapp_delivery(whatsapp, selection, preflight=True))
+                try:
+                    deliver = stack.enter_context(
+                        prepare_whatsapp_delivery(whatsapp, selection, preflight=True)
+                    )
+                except RuntimeError as error:
+                    # Keep the application exception contract; the CLI serializes this report.
+                    # No selected profile is changed until all target preflights have succeeded.
+                    channels["whatsapp"] = {"status": "failed", "error": str(error)}
+                    report = _report(look, weather, background, jpeg, "apply", channels, False)
+                    report["overlay"] = overlay is not None
+                    report["action"] = f"attempted delivery to {target}; see channels for outcomes"
+                    raise ClosetWeatherPreflightError(str(error), report) from error
             # Both selected targets have passed preflight before either profile changes.
             if "hermes" in gateways:
                 try:

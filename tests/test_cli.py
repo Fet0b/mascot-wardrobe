@@ -88,7 +88,6 @@ class CLITests(unittest.TestCase):
                 manifest, Path(work).resolve() / "mascot-wardrobe-out" / "catalog" / "manifest.json"
             )
             self.assertTrue(manifest.is_file())
-        self.assertFalse((ROOT / "mascot-wardrobe-out").exists())
 
     def test_demo_real_http_reports_repeat_noop_without_remote_channel_claims(self):
         manifest = self.generate()

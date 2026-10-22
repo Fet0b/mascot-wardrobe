@@ -44,9 +44,11 @@ GET readback complete before either profile changes. The bridge needs the candid
 in its approved catalog to compare, so apply may stage that JPEG and create lock/state
 directories during preflight; preflight failure can leave these reviewable files. No profile
 has changed at that point. The built-in WhatsApp lock remains held across both deliveries.
-Sync reads the own photo again before POST. Its state defaults to `<approved-catalog>/.avatar-sync`
-in the CLI; Python callers must supply a private state directory. Keep one state/backup per
-connected account and reuse it for subsequent runs. Do not repoint it to a different account.
+Sync reads the own photo again before POST. CLI state defaults to
+`mascot-wardrobe-out/whatsapp-state` and can be changed with `--whatsapp-state-dir`; it is
+separate from the approved catalog. Python callers must supply a state directory. Keep one
+state/backup per connected account and reuse it for subsequent runs. Do not repoint it to a
+different account.
 
 Each delivery failure is reported per gateway. Hermes failure does not hide a successful
 WhatsApp delivery. WhatsApp failure after Hermes success triggers Hermes rollback where the

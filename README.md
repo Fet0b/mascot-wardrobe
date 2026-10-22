@@ -16,6 +16,7 @@ no image generation, no model, and no weather request or coordinates in that com
 mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR \
   --state-file /path/to/weather/state.json \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000
 ```
 
@@ -164,6 +165,7 @@ default**; nothing changes until you add `--apply` and a configured channel.
 ```sh
 mascot-wardrobe publish --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
   --temperature 22 --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header "Name: value" \
   --telegram --telegram-expected-bot-id 123456789          # dry-run
 ```

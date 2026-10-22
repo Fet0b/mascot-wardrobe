@@ -71,6 +71,12 @@ def parser():
     publish.add_argument(
         "--whatsapp-catalog-dir", type=Path, help="Approved photo directory read by the bridge"
     )
+    publish.add_argument(
+        "--whatsapp-state-dir",
+        type=Path,
+        default=DEFAULT_OUT / "whatsapp-state",
+        help="Private WhatsApp backup, lock and sync state directory (separate from the photo catalog)",
+    )
     publish.add_argument("--whatsapp-bridge-url", help="Loopback bridge URL, e.g. http://127.0.0.1:3000")
     publish.add_argument(
         "--whatsapp-bridge-header",
@@ -504,12 +510,16 @@ def _whatsapp_target(args):
         raise ValueError(
             "whatsapp needs --whatsapp-catalog-dir, --whatsapp-bridge-url and --whatsapp-bridge-header"
         )
+    catalog_dir = args.whatsapp_catalog_dir.resolve()
+    state_dir = args.whatsapp_state_dir.resolve()
+    if state_dir.is_relative_to(catalog_dir) or catalog_dir.is_relative_to(state_dir):
+        raise ValueError("WhatsApp photo catalog and state directory must be separate")
     adapter = HermesWhatsAppProfileAdapter(
         args.whatsapp_bridge_url,
         bridge_header=args.whatsapp_bridge_header,
-        state_dir=args.whatsapp_catalog_dir / ".avatar-sync",
+        state_dir=state_dir,
     )
-    return WhatsAppTarget(args.whatsapp_catalog_dir, adapter)
+    return WhatsAppTarget(catalog_dir, adapter)
 
 
 def _publish_closet_parser(commands):
@@ -561,6 +571,12 @@ def _publish_closet_parser(commands):
     command.add_argument(
         "--whatsapp-catalog-dir", type=Path, help="Approved photo directory read by the bridge"
     )
+    command.add_argument(
+        "--whatsapp-state-dir",
+        type=Path,
+        default=DEFAULT_OUT / "whatsapp-state",
+        help="Private WhatsApp backup, lock and sync state directory (separate from the photo catalog)",
+    )
     command.add_argument("--whatsapp-bridge-url", help="Loopback bridge URL, e.g. http://127.0.0.1:3000")
     command.add_argument(
         "--whatsapp-bridge-header",
@@ -571,6 +587,7 @@ def _publish_closet_parser(commands):
 
 def _publish_closet(args):
     from mascot_wardrobe.application.closet_weather import (
+        ClosetWeatherPreflightError,
         overlay_for_date,
         publish_closet_look,
         read_weather_state,
@@ -600,22 +617,25 @@ def _publish_closet(args):
     else:
         temperature, unit = args.temperature, args.unit
         weather = {"source": "explicit-input-not-live-weather"}
-    return publish_closet_look(
-        args.closet_root,
-        args.wardrobe,
-        args.country,
-        temperature,
-        unit,
-        weather=weather,
-        profiles=args.profiles,
-        background=args.background,
-        overlay=overlay_for_date(
-            args.overlay, args.overlay_start_date, args.overlay_end_date, timezone=args.overlay_timezone
-        ),
-        apply=args.apply,
-        whatsapp=_whatsapp_target(args) if gateways is None or "whatsapp" in gateways else None,
-        gateways=gateways,
-    )
+    try:
+        return publish_closet_look(
+            args.closet_root,
+            args.wardrobe,
+            args.country,
+            temperature,
+            unit,
+            weather=weather,
+            profiles=args.profiles,
+            background=args.background,
+            overlay=overlay_for_date(
+                args.overlay, args.overlay_start_date, args.overlay_end_date, timezone=args.overlay_timezone
+            ),
+            apply=args.apply,
+            whatsapp=_whatsapp_target(args) if gateways is None or "whatsapp" in gateways else None,
+            gateways=gateways,
+        )
+    except ClosetWeatherPreflightError as error:
+        return error.report
 
 
 def _publish_targets(args):

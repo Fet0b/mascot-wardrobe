@@ -79,9 +79,12 @@ succeeded, 1 a channel failed, 2 invalid configuration (including `--apply` with
   loopback IP with an explicit port.
 - `--whatsapp-catalog-dir` must be an existing real directory that your bridge reads approved
   `<slug>.jpg` files from. There is no default and symbolic links are refused.
+- The state directory defaults to `mascot-wardrobe-out/whatsapp-state` and can be set with
+  `--whatsapp-state-dir`. It keeps the lock, previous-photo backup and sync record outside
+  the approved photo catalog; choose a directory with appropriate local permissions.
 - Give the header your bridge requires with `--whatsapp-bridge-header "Name: value"` or the
-  `MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER` environment variable. All three WhatsApp settings
-  must be present together.
+  `MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER` environment variable. These settings are separate
+  from the catalog and state directories.
 - The readback field names are tested only against fakes. Compare them with your bridge before
   the first `--apply` (see [channels](channels.md)).
 

@@ -91,6 +91,8 @@ class PublishCliTests(unittest.TestCase):
         return (
             "--whatsapp-catalog-dir",
             self.approved,
+            "--whatsapp-state-dir",
+            self.root / "whatsapp-state",
             "--whatsapp-bridge-url",
             url,
             "--whatsapp-bridge-header",

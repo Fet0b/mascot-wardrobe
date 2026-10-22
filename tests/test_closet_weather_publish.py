@@ -323,6 +323,7 @@ class CliTests(ClosetFixture):
         super().setUp()
         self.approved = self.base / "approved"
         self.approved.mkdir()
+        self.whatsapp_state = self.base / "whatsapp-state"
 
     def write_state(self, **fields):
         path = self.base / "state.json"
@@ -344,6 +345,8 @@ class CliTests(ClosetFixture):
         return (
             "--whatsapp-catalog-dir",
             self.approved,
+            "--whatsapp-state-dir",
+            self.whatsapp_state,
             "--whatsapp-bridge-url",
             url,
             "--whatsapp-bridge-header",
@@ -390,7 +393,12 @@ class CliTests(ClosetFixture):
         self.assertTrue(first["channels"]["whatsapp"]["verified"])
         self.assertEqual(json.loads(out2)["channels"]["whatsapp"]["action"], "unchanged")
         self.assertEqual(bridge.posts, [slug])
-        self.assertEqual([p.name for p in self.approved.iterdir()], [slug + ".jpg"])
+        self.assertEqual(sorted(p.name for p in self.approved.iterdir()), [slug + ".jpg"])
+        self.assertEqual(
+            sorted(p.name for p in self.whatsapp_state.iterdir()),
+            ["avatar-sync.json", "avatar-sync.lock", "whatsapp-profile-before-sync.jpg"],
+        )
+        self.assertTrue(all(p.is_file() for p in self.approved.iterdir()))
         staged = (self.approved / (slug + ".jpg")).read_bytes()
         self.assertEqual(hashlib.sha256(staged).hexdigest(), first["jpg_sha256"])
         with Image.open(io.BytesIO(staged)) as image:
@@ -449,8 +457,12 @@ class CliTests(ClosetFixture):
         before = tree_state(self.root)
         code, out, _ = self.run_cli("--temperature", 20, "--apply", *self.whatsapp_args("http://127.0.0.1:1"))
         self.assertEqual(code, 1)
-        self.assertEqual(json.loads(out)["channels"]["whatsapp"]["status"], "failed")
+        result = json.loads(out)
+        self.assertEqual(result["channels"]["whatsapp"]["status"], "failed")
+        self.assertFalse(result["ok"])
         self.assertEqual(tree_state(self.root), before)
+        self.assertFalse((self.whatsapp_state / "whatsapp-profile-before-sync.jpg").exists())
+        self.assertFalse((self.whatsapp_state / "avatar-sync.json").exists())
 
     def test_overlay_is_applied_only_when_supplied_and_reported(self):
         overlay = self.base / "overlay.png"

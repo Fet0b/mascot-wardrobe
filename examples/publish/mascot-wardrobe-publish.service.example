@@ -19,6 +19,7 @@ ExecStart=/path/to/venv/bin/mascot-wardrobe publish \
   --manifest mascot-wardrobe-out/catalog/manifest.json --country BR \
   --live-weather --latitude 0.0 --longitude 0.0 \
   --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-state-dir /path/to/private/whatsapp-state \
   --whatsapp-bridge-url http://127.0.0.1:3000 \
   --telegram --telegram-expected-bot-id 123456789 \
   --telegram-state-dir /path/to/workdir/state \
