@@ -10,6 +10,10 @@ They are examples. They are never installed by this project, they carry the `.ex
 and live outside any directory read by cron or systemd, and nothing in the repository
 installs, enables or starts them. Copy and adapt them yourself if you want them.
 
+`inventory select` resolves a user-chosen range default and changes only inventory active state;
+it changes no gateway or profile photo and installs no scheduler. Missing mappings exit 3
+without fallback. These scheduler examples remain opt-in and use their existing manifest flow.
+
 ## What they do
 
 Only existing images are used. The commands call `mascot-wardrobe select` or `demo` with an

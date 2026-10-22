@@ -29,6 +29,7 @@ REQUIRED = [
     "assets/hero.png",
     "assets/contact-sheet.png",
     "examples/mascot.png",
+    "examples/hermes-skill/mudar-peca/SKILL.md",
     "examples/scheduler/mascot-wardrobe.cron.example",
     "examples/scheduler/mascot-wardrobe.service.example",
     "examples/scheduler/mascot-wardrobe.timer.example",

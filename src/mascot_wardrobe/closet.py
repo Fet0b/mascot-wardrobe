@@ -388,6 +388,16 @@ class Closet:
     # -- paths and read access ----------------------------------------------------------------
 
     @property
+    def mascot_sha256(self) -> str:
+        """The pinned mascot identity hash (read-only)."""
+        return self._data["mascot"]["sha256"]
+
+    @property
+    def mask_sha256(self) -> str:
+        """The pinned edit-mask identity hash (read-only)."""
+        return self._data["mask"]["sha256"]
+
+    @property
     def source_path(self) -> Path:
         return self.root / "mascot" / "source.png"
 

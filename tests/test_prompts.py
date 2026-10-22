@@ -155,3 +155,61 @@ class YesNoPromptTests(unittest.TestCase):
         self.assertTrue(self.ask(["maybe", "y"]))
         with self.assertRaisesRegex(ValueError, "yes or no"):
             self.ask(["a", "b", "c"])
+
+
+class RangePromptTests(unittest.TestCase):
+    def test_oversized_garment_number_reasks_without_selecting_a_default(self):
+        from mascot_wardrobe.interfaces.prompts import ask_number
+
+        read, prompts = asker("9" * 5000, "2")
+        messages = []
+        self.assertEqual(ask_number(read, messages.append, [1, 2]), 2)
+        self.assertEqual(prompts, ["number> ", "number> "])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("existing garment number", messages[0])
+
+    def ask_ranges(self, answers, **kwargs):
+        from mascot_wardrobe.infrastructure.policies import load_profile
+        from mascot_wardrobe.interfaces.prompts import ask_ranges
+
+        read, prompts = asker(*answers)
+        lines = []
+        value = ask_ranges(read, lines.append, load_profile("BR"), **kwargs)
+        self.assertEqual(prompts[-1], "temperature> ")
+        return value, "\n".join(lines)
+
+    def test_named_ranges_and_numeric_celsius_are_distinct(self):
+        self.assertEqual(self.ask_ranges(["cold,mild,cold"])[0], (("cold", "mild"), None))
+        self.assertEqual(self.ask_ranges(["12"])[0], (("cold",), 12.0))
+        self.assertEqual(self.ask_ranges(["15"])[0], (("mild",), 15.0))
+        _, text = self.ask_ranges(["cold"])
+        for needle in ("very_cold", "very_hot", "5", "32"):
+            self.assertIn(needle, text)
+
+    def test_bad_ranges_mixed_values_and_unit_suffixes_reask(self):
+        value, text = self.ask_ranges(["12,cold", "12C", "ambient"])
+        self.assertEqual(value, (("ambient",), None))
+        self.assertIn("Mixing", text)
+        self.assertIn("named", text)
+        for answers in (["unknown"] * 3, ["nan", "inf", "66"], ["", "cold,", "1,2"]):
+            with self.subTest(answers=answers), self.assertRaisesRegex(ValueError, "after 3 attempts"):
+                self.ask_ranges(answers)
+
+    def test_blank_keep_and_eof_have_no_default(self):
+        from mascot_wardrobe.interfaces.prompts import KEEP, EndOfInput
+
+        self.assertIs(self.ask_ranges([""], allow_keep=True)[0], KEEP)
+        with self.assertRaises(EndOfInput):
+            self.ask_ranges([])
+
+    def test_single_named_range_and_number_prompts_validate_membership(self):
+        from mascot_wardrobe.interfaces.prompts import ask_number, ask_range_name
+
+        read, _ = asker("1", "cold,mild", "cold")
+        self.assertEqual(ask_range_name(read, lambda text: None, ("cold", "mild")), "cold")
+        read, _ = asker("1.0", "9", "2")
+        self.assertEqual(ask_number(read, lambda text: None, (1, 2)), 2)
+        for function, values in ((ask_range_name, ("cold",)), (ask_number, (1,))):
+            read, _ = asker("bad", "bad", "bad")
+            with self.assertRaisesRegex(ValueError, "after 3 attempts"):
+                function(read, lambda text: None, values)

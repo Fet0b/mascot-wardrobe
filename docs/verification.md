@@ -20,6 +20,7 @@ virtual environment, installs the wheel and then:
 
 1. runs `mascot-wardrobe --help`;
 2. generates from `examples/mascot.png` twice and compares manifest and asset hashes and mtimes;
+   its own temporary inventory home contains six garments with stable numbers after both runs;
 3. selects at 3, 10, 17, 21, 28 and 35 C (one per BR category) and at 77 F (warm);
 4. runs `demo --channel telegram` twice and checks the second run is `unchanged` with identical
    hashes and mtimes.
@@ -30,6 +31,10 @@ have the build module (`pip install build`); the script stops with a message oth
 `MASCOT_WARDROBE_EVIDENCE_DIR` to choose where outputs go; by default a new temporary directory
 is used. Each run creates its own `run.*` directory inside it with `mktemp -d`, never touches
 existing content and keeps the run directory afterwards.
+
+Before the first installed CLI command, the smoke script sets `MASCOT_WARDROBE_HOME` to its
+own run directory. Pytest also redirects inventory data and isolates each test, including
+subprocesses, so verification does not register example garments into a real user inventory.
 
 ## Source distribution
 

@@ -199,3 +199,20 @@ def publish_outfit(selection, *, apply=False, force=False, whatsapp=None, telegr
         "channels": channels,
         "ok": all(item["status"] != "failed" for item in channels.values()),
     }
+
+
+# Inventory use cases load after the legacy application definitions.
+from mascot_wardrobe.application.inventory import (  # noqa: E402, F401
+    closet_item_id_free,
+    inventory_ranges,
+    inventory_view,
+    register_asset,
+    register_closet,
+    register_closet_item,
+    register_manifest,
+    remove_garment,
+    require_closet_item_id_free,
+    resolve_default,
+    select_from_inventory,
+    set_default,
+)

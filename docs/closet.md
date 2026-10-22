@@ -3,7 +3,7 @@
 `mascot-wardrobe closet` keeps **one** user-supplied mascot as an immutable source and dresses it
 with reusable items. It never regenerates or redraws the character: the existing deterministic
 `LocalComposer` paints garments, and only inside an explicit edit mask you provide. The classic
-`generate` / `select` flow and its `manifest.json` are unchanged.
+`generate` / `select` flow retains its manifest format and legacy selection behavior.
 
 ## Identity guarantee
 
@@ -39,6 +39,17 @@ asset or hand-edited item cannot contaminate existing wardrobes. An unknown `sch
 refused. The mascot of an existing closet cannot be replaced: start a new closet instead.
 
 ## Inventory
+
+Closet items also register automatically into the [persistent numbered inventory](inventory.md)
+when saved through CLI `add`, `edit` or `piece`. Library `Closet` calls retain their original
+behavior. `--range cold --range mild` adds suitability ranges to the template category; these
+are descriptive and survive a later edit without `--range`. Closet schema 1 is unchanged.
+
+Item ids must be unique across closets sharing mascot and mask hashes. Add checks this before
+rendering. A guarded edit retains the inventory number; ambiguous different-byte imports fail
+atomically. Removing from a closet leaves the inventory garment alone. Failed registration
+keeps the saved closet output and prints an exact single-item retry with its previous-hash
+guard; see [inventory recovery](inventory.md#closet-identity-and-recovery).
 
 ```
 mascot-wardrobe closet --root DIR add coat --template very_cold --style classic \
@@ -76,17 +87,21 @@ mascot-wardrobe closet --root DIR piece --country BR [--wardrobe today]
 
 An interactive loop for terminals (scripts use `add`). For every piece it asks, in order:
 
-1. the intended use temperature in Celsius, mapped to one of the six categories through the same
-   country-profile thresholds as `select` (`CountryProfile.classify`; a boundary belongs to the
-   warmer category, and values outside -90 to 65 are rejected);
+1. named suitability ranges (`cold` or `cold,mild`), listed with their country-profile
+   boundaries; the first range is the compositor template. A bare Celsius number such as `12`
+   still uses the same thresholds as `select` (`CountryProfile.classify`; boundaries belong to
+   the warmer category and values outside -90 to 65 are rejected). There are no numeric range
+   indices or unit suffixes; mixed numbers and names are rejected;
 2. the style, and 3. the palette, each either supplied by you or delegated to the deterministic
    local `auto`. Nothing is inherited from the previous piece;
-4. an item id (blank takes `<category>-<n>`).
+4. an item id (blank takes an available `<category>-<n>`, skipping ids registered for the same
+   mascot and mask).
 
 Only that item is rendered and saved. The prompts and the JSON result show the preview path,
-version, sha256, temperature and category, style and palette with their provenance (`user` or
-`auto`), and that no remote inference was used. The intended temperature is kept in the item
-description. You may then revise the piece (blank temperature or "keep current" keeps a value): the
+inventory number, version, sha256, ranges, style and palette with their provenance (`user` or
+`auto`), and that no remote inference was used. Numeric answers retain their temperature in the
+description; named answers carry ranges with no numeric temperature. You may then revise the
+piece (blank ranges or "keep current" keeps a value): the
 revision goes through `edit`, so it bumps only that item's version and leaves every other item, its
 file and its hash untouched. Finally it asks whether to create another piece; yes starts a fresh
 cycle. With `--wardrobe NAME` the session's pieces are saved as that wardrobe and its catalog is
@@ -215,7 +230,8 @@ mascot-wardrobe closet --root DIR migrate
 ## Not in this MVP
 
 - No automatic mask or body detection; you author the mask.
-- No import of externally generated garment art and no external reference images; items come from the six built-in templates in the two built-in styles.
+- The closet renderer uses the six built-in templates in two styles, with no external reference
+  images. Existing garment PNGs can be imported into the separate persistent inventory.
 - No per-category (weather) mapping of closet wardrobes, and no
   wiring into `select` / `publish` yet.
 - Item writes are atomic per file, but `closet.json` and an item file are not updated in one

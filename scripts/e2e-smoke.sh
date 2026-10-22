@@ -66,6 +66,7 @@ cp "$root/examples/mascot.png" mascot.png
 
 # Any accidental network use from the CLI would fail against this dead loopback proxy.
 export HTTP_PROXY="http://127.0.0.1:9" HTTPS_PROXY="http://127.0.0.1:9" NO_PROXY=""
+export MASCOT_WARDROBE_HOME="$run/home"
 
 snapshot() { # hashes and mtimes of every file below $1
   (
@@ -94,6 +95,14 @@ snapshot "$catalog" >"$run/gen2.txt"
 cmp "$run/gen1.txt" "$run/gen2.txt" || fail "second generate changed hashes or mtimes"
 [ "$(ls "$catalog"/*.png "$catalog"/*.jpg | wc -l)" -eq 18 ] || fail "expected 18 outfit images"
 echo "generate is idempotent: $(grep -c . "$run/gen1.txt") lines identical"
+
+step "persistent inventory contains six garments after repeated generation"
+"$cli" inventory list --json >"$run/inventory.json"
+"$py" -c 'import json, sys
+items = json.load(open(sys.argv[1]))
+assert len(items) == 6, "expected six inventory garments"
+assert [item["number"] for item in items] == list(range(1, 7)), "inventory numbers changed"
+' "$run/inventory.json"
 
 step "select one outfit per category, plus Fahrenheit"
 check_select() { # temperature unit expected-category

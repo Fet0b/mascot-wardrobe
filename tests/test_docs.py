@@ -254,3 +254,45 @@ def test_script_prerequisites_are_documented():
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "pip install build" in text, name
         assert ".venv/bin/python" in text, name
+
+
+def test_inventory_skill_requires_explicit_user_choice_and_documented_commands():
+    template = (ROOT / "examples/hermes-skill/mudar-peca/SKILL.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs/inventory.md").read_text(encoding="utf-8")
+    commands = re.findall(r"mascot-wardrobe inventory ([a-z-]+)", template)
+    assert commands == ["ranges", "list", "set-default"]
+    for command in commands:
+        assert f"mascot-wardrobe inventory {command}" in guide
+    for rule in ("EVERY", "without filtering or ranking", "ask the user", "must not choose"):
+        assert rule in template
+    assert not re.search(r"^\s*mascot-wardrobe\s+(?:publish|demo|sandbox)\b", template, re.MULTILINE)
+    for constraint in ("must not publish", "must not touch any gateway", "does not install"):
+        assert constraint in template
+
+
+def test_inventory_guide_covers_mapping_recovery_and_format_limits():
+    guide = (ROOT / "docs/inventory.md").read_text(encoding="utf-8")
+    for command in (
+        "import-manifest",
+        "import-closet",
+        "import-asset",
+        "default",
+        "select",
+        "remove",
+        "verify",
+    ):
+        assert f"mascot-wardrobe inventory {command}" in guide
+    for contract in (
+        "--data-dir",
+        "MASCOT_WARDROBE_HOME",
+        "XDG_DATA_HOME",
+        "--no-inventory",
+        "--replaces",
+        "no-default",
+        "exit 3",
+        "never reused",
+        "suitability",
+        "PNG",
+    ):
+        assert contract in guide
+    assert (ROOT / "docs/adr/0005-format-agnostic-inventory.md").is_file()

@@ -50,3 +50,33 @@ acceptance-criterion ids of their own.
 | `closet migrate`: preserved data, backup, atomicity, refusals | `tests/test_closet.py::test_preserves_identity_and_adds_styles_and_provenance`<br>`tests/test_closet.py::test_backup_is_byte_equal_never_overwritten_and_old_files_untouched`<br>`tests/test_closet.py::test_post_commit_failure_restores_the_backup`<br>`tests/test_closet.py::test_dry_run_writes_nothing`<br>`tests/test_closet.py::test_refusals`<br>`tests/test_cli_closet.py::test_open_message_then_dry_run_then_migrate` |
 | `closet piece`: temperature mapping, per-piece choices, targeted revision, terminal only | `tests/test_piece.py::test_boundaries_use_the_profile_thresholds`<br>`tests/test_piece.py::test_style_and_palette_are_asked_for_every_piece_and_never_inherited`<br>`tests/test_piece.py::test_revision_changes_only_the_current_item`<br>`tests/test_piece.py::test_non_interactive_piece_is_refused_with_guidance` |
 | Generated art pins the classic style | `tests/test_art.py::test_art_pins_the_classic_style_and_the_profile_palette` |
+
+## Persistent inventory (supporting coverage)
+
+The inventory extends the existing acceptance criteria without changing manifest selection,
+closet identity or rendering guarantees. ADR [0005](adr/0005-format-agnostic-inventory.md)
+records its boundaries.
+
+| Behaviour | Tests |
+| --- | --- |
+| Pure inventory values, stable numbering and retirement | `tests/test_inventory_domain.py::test_allocation_retirement_and_roundtrip_never_reuse_numbers`<br>`tests/test_inventory_domain.py::test_pure_module_import_does_not_load_io_adapters_or_pillow` |
+| Suitability-independent defaults and exact saved selection | `tests/test_inventory_domain.py::test_defaults_ignore_suitability_and_protect_mapped_or_active_numbers`<br>`tests/test_inventory_selection.py::test_view_defaults_and_selection_preserve_unsuitable_user_choice` |
+| Persistent safe data location and unchanged no-op writes | `tests/test_inventory_store.py::test_data_home_precedence_and_safe_paths`<br>`tests/test_inventory_store.py::test_first_open_and_noop_have_no_backup_or_rewrite` |
+| Staged copies, backups, tamper checks and transaction rollback | `tests/test_inventory_store.py::test_staged_snapshot_commit_backup_hash_and_tamper`<br>`tests/test_inventory_store.py::test_aborted_stage_and_failed_commit_preserve_previous_bytes` |
+| Schema refusal, migration and safe asset references | `tests/test_inventory_store.py::test_schema_refusal_migration_backup_and_safe_internal_paths` |
+| Manifest order/provenance, repeat import and atomic validation failure | `tests/test_inventory_import.py::test_manifest_registers_six_preserves_provenance_and_is_idempotent`<br>`tests/test_inventory_import.py::test_unsafe_manifest_aborts_without_modifying_existing_inventory`<br>`tests/test_inventory_import.py::test_manifest_batch_staging_failure_is_atomic` |
+| Manual content-addressed import and adapter limits | `tests/test_inventory_import.py::test_manual_import_is_content_addressed_and_rejects_unsupported_format` |
+| Closet identity collisions, metadata/range retention and guarded recovery | `tests/test_inventory_import.py::test_closet_identity_metadata_ranges_and_guarded_replacement`<br>`tests/test_inventory_import.py::test_two_closets_same_identity_different_bytes_fail_without_changes`<br>`tests/test_inventory_import.py::test_closet_single_item_retry_and_migration_guard` |
+| Named profile boundaries and no mutation for missing defaults | `tests/test_inventory_selection.py::test_inventory_ranges_uses_named_categories_and_profile_boundaries`<br>`tests/test_inventory_selection.py::test_thresholds_and_no_default_never_mutate_inventory` |
+| Script refusal and lazy global data-home resolution | `tests/test_inventory_cli.py::test_change_requires_user_input_and_points_scripts_to_set_default`<br>`tests/test_inventory_cli.py::test_inventory_parser_supports_lazy_data_home_and_named_range_alias` |
+| Named ranges, preserved numeric Celsius and independent choices | `tests/test_prompts.py::test_named_ranges_and_numeric_celsius_are_distinct`<br>`tests/test_piece.py::test_named_ranges_are_asked_again_for_each_piece`<br>`tests/test_piece.py::test_boundaries_use_the_profile_thresholds` |
+| Invalid numeric garment answers retry without choosing a default | `tests/test_prompts.py::test_oversized_garment_number_reasks_without_selecting_a_default` |
+| Visible garment numbers, guarded revisions and taken-id preflight | `tests/test_piece.py::test_saved_piece_has_visible_inventory_number_and_guarded_revision`<br>`tests/test_piece.py::test_inventory_ids_are_skipped_and_custom_collisions_reasked_before_rendering`<br>`tests/test_piece.py::test_failed_revision_registration_keeps_saved_piece_and_exact_guarded_retry` |
+| Generic skill asks the user and uses only documented inventory commands | `tests/test_docs.py::test_inventory_skill_requires_explicit_user_choice_and_documented_commands`<br>`tests/test_docs.py::test_inventory_guide_covers_mapping_recovery_and_format_limits` |
+| Skill in complete source archive; runtime-only wheel | `tests/test_sdist.py::test_sdist_contains_all_public_paths`<br>`tests/test_sdist.py::test_wheel_from_sdist_is_runtime_only` |
+| Temporary e2e home and six garments after repeated generation | `tests/test_scripts.py::test_e2e_redirects_inventory_before_any_installed_cli_command`; `scripts/e2e-smoke.sh` |
+| Missing metadata never restarts numbering | `tests/test_inventory_store.py::test_missing_metadata_never_reinitializes_an_existing_inventory` |
+| Same manifest identity rejects changed companion bytes atomically | `tests/test_inventory_import.py::test_manifest_same_identity_changed_companion_aborts_entire_batch` |
+| Every persisted garment has at least one suitability range | `tests/test_inventory_domain.py::test_omitted_or_persisted_empty_ranges_are_rejected`<br>`tests/test_inventory_import.py::test_manual_import_requires_a_range_without_mutating_inventory` |
+| Printed retries retain ranges and recover first edit registration | `tests/test_inventory_cli.py::test_printed_closet_retry_preserves_additional_ranges`<br>`tests/test_inventory_cli.py::test_printed_piece_retry_preserves_named_ranges`<br>`tests/test_inventory_cli.py::test_failed_first_edit_has_executable_recovery`<br>`tests/test_inventory_import.py::test_explicit_first_registration_recovery_keeps_existing_hash_guards` |
+| Missing default preserves active state and ignores neighboring mappings | `tests/test_inventory_selection.py::test_missing_default_preserves_active_and_ignores_neighbor_mappings` |

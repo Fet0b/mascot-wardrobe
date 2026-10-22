@@ -7,6 +7,16 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Persistent format-agnostic inventory with stable garment numbers, transactional storage,
+  backups, locking, hash verification and static PNG asset imports. Manifest and closet imports
+  are idempotent; ambiguous closet identities are refused and explicit edits use hash guards.
+- `inventory` commands for complete numbered listings, range boundaries, user-selected defaults,
+  temperature selection, removal and verification. Interactive `change` / `mudar-peca` asks for
+  a named range and then the user's garment number; suitability never filters selection and a
+  missing default exits 3 without mutation. Inventory commands never contact channels.
+- Automatic CLI registration for generated and closet garments (`generate --no-inventory` opts
+  out), named suitability ranges in `closet piece`, and a generic Hermes skill template in the
+  source distribution. Test and e2e inventory data is redirected to temporary homes.
 - `mascot-wardrobe closet piece --country XX [--wardrobe NAME]`: an interactive loop that creates
   one piece at a time. It asks the intended temperature in Celsius (country-profile thresholds),
   style and palette separately for every piece, renders and saves only that item with provenance,

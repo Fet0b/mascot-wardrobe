@@ -4,7 +4,8 @@
 
 Give it a PNG of your own mascot and it dresses the mascot for six temperature bands. The six
 outfits are generated **once** with local Pillow overlays. After that, picking the right outfit
-for a temperature is a lookup in a manifest: no image work, no network, no model.
+for a temperature is a lookup in a manifest: no image work, no network, no model. A persistent
+numbered inventory also keeps garments beyond catalog folders and records your chosen defaults.
 
 ## Why generate once, select often
 
@@ -65,6 +66,26 @@ where your mascot's body is: the templates are fitted to the silhouette measured
 required otherwise (exit 2, nothing written), so scripts pass them explicitly. `auto` is
 deterministic and local; no reference images are sent or fetched. See
 [docs/wardrobe.md](docs/wardrobe.md).
+
+## Persistent inventory and your defaults
+
+`generate` and the closet item commands register saved garments automatically outside the
+repository. Use `generate --no-inventory` to opt out, or the global `--data-dir PATH` before the
+command to choose a data home. The inventory has stable numbers, independent per-item style,
+palette and suitability ranges. Static PNG is the implemented asset adapter.
+
+```sh
+mascot-wardrobe inventory ranges --country BR
+mascot-wardrobe inventory change --country BR
+mascot-wardrobe inventory list --range cold --json
+mascot-wardrobe inventory select --country BR --temperature 12
+```
+
+`change` (alias `mudar-peca`) asks for a named range, shows every garment regardless of
+suitability, then saves the number you choose. Selection follows that mapping only; a missing
+mapping returns `no-default` and exit 3 without changing active selection. It changes no live
+photo or gateway. See [inventory and imports](docs/inventory.md) for scripts, data location and
+guarded recovery.
 
 ## Identity-locked closet
 
@@ -141,6 +162,7 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 - [Configuration, weather and time semantics](docs/configuration.md)
 - [Wardrobe compositor and atlas layout](docs/wardrobe.md)
 - [Identity-locked closet, wardrobes and catalog](docs/closet.md)
+- [Persistent inventory, range defaults and imports](docs/inventory.md)
 - [Channels (sandbox exports and opt-in live adapters)](docs/channels.md)
 - [Scheduler examples (not installed)](docs/scheduler.md)
 - [Traceability](docs/traceability.md) and [verification](docs/verification.md)

@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -272,3 +274,241 @@ class SessionCLITests(PieceCase):
             )
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue())["pieces"][0]["id"], "cold-1")
+
+
+class NamedRangeTests(PieceCase):
+    def test_named_ranges_save_first_template_without_fabricated_temperature(self):
+        result, text, _ = self.session(*piece("cold,mild", "streetwear", "auto"), "n", "n")
+        made = result["pieces"][0]
+        self.assertEqual(made["ranges"], ["cold", "mild"])
+        self.assertEqual(made["template"], "cold")
+        self.assertIsNone(made["temperature_c"])
+        self.assertNotIn("None", text)
+        self.assertIn("mild", self.closet.items()[made["id"]]["description"])
+
+    def test_named_revision_changes_template_and_only_current_piece(self):
+        self.closet.add_item("other", "warm", ["#336699"], style="classic")
+        before = self.closet.item_path("other").read_bytes()
+        result, _, _ = self.session(
+            *piece("12", "classic", "#2878b5"), "y", "warm,very_hot", "3", "3", "n", "n"
+        )
+        made = result["pieces"][0]
+        self.assertEqual(made["ranges"], ["warm", "very_hot"])
+        self.assertIsNone(made["temperature_c"])
+        self.assertEqual(made["template"], "warm")
+        self.assertEqual(made["version"], 2)
+        self.assertEqual(self.closet.item_path("other").read_bytes(), before)
+
+    def test_named_ranges_are_asked_again_for_each_piece(self):
+        result, _, read = self.session(
+            *piece("cold,mild", "classic", "#2878b5"),
+            "n",
+            "y",
+            *piece("warm", "streetwear", "auto"),
+            "n",
+            "n",
+        )
+        self.assertEqual([made["ranges"] for made in result["pieces"]], [["cold", "mild"], ["warm"]])
+        self.assertEqual(read.prompts.count("temperature> "), 2)
+
+
+class InventorySessionTests(PieceCase):
+    def test_saved_piece_has_visible_inventory_number_and_guarded_revision(self):
+        calls = []
+
+        def register(closet, item_id, store, **kwargs):
+            calls.append((closet.items()[item_id]["sha256"], kwargs))
+            return {"number": 7, "status": "imported" if len(calls) == 1 else "updated"}
+
+        with (
+            patch(
+                "mascot_wardrobe.application.inventory.register_closet_item",
+                side_effect=register,
+            ),
+            patch("mascot_wardrobe.application.inventory.closet_item_id_free", return_value=True),
+        ):
+            result, text, _ = self.session(
+                *piece("cold,mild", "classic", "#2878b5"),
+                "y",
+                "warm",
+                "3",
+                "3",
+                "n",
+                "n",
+                store=object(),
+            )
+        made = result["pieces"][0]
+        self.assertEqual(made["inventory"]["number"], 7)
+        self.assertIn("#7", text)
+        self.assertEqual(calls[0][1]["ranges"], ("cold", "mild"))
+        self.assertEqual(calls[1][1], {"ranges": ("warm",), "replaces": calls[0][0]})
+        self.assertNotEqual(calls[0][0], calls[1][0])
+
+    def test_range_metadata_revision_keeps_image_and_registers_without_version_bump(self):
+        calls = []
+
+        def register(closet, item_id, store, **kwargs):
+            calls.append((closet.items()[item_id]["sha256"], kwargs))
+            return {"number": 4, "status": "updated"}
+
+        with (
+            patch(
+                "mascot_wardrobe.application.inventory.register_closet_item",
+                side_effect=register,
+            ),
+            patch("mascot_wardrobe.application.inventory.closet_item_id_free", return_value=True),
+        ):
+            result, _, _ = self.session(
+                *piece("cold", "classic", "#2878b5"),
+                "y",
+                "cold,mild",
+                "3",
+                "3",
+                "n",
+                "n",
+                store=object(),
+            )
+        made = result["pieces"][0]
+        self.assertEqual(made["version"], 1)
+        self.assertEqual(made["ranges"], ["cold", "mild"])
+        self.assertEqual(calls[0][0], calls[1][0])
+        self.assertEqual(calls[1][1]["ranges"], ("cold", "mild"))
+
+    def test_inventory_ids_are_skipped_and_custom_collisions_reasked_before_rendering(self):
+        def free(closet, item_id, store):
+            return item_id not in {"cold-1", "taken"}
+
+        with (
+            patch(
+                "mascot_wardrobe.application.inventory.register_closet_item",
+                return_value={"number": 3, "status": "imported"},
+            ),
+            patch("mascot_wardrobe.application.inventory.closet_item_id_free", side_effect=free),
+            patch(
+                "mascot_wardrobe.application.inventory.require_closet_item_id_free",
+                side_effect=ValueError("collision: item id taken already registered"),
+            ),
+        ):
+            result, text, read = self.session(
+                *piece("cold", "classic", "#2878b5", "taken"),
+                "",
+                "n",
+                "n",
+                store=object(),
+            )
+        self.assertEqual(result["pieces"][0]["id"], "cold-2")
+        self.assertIn("item id [cold-2]> ", read.prompts)
+        self.assertIn("collision", text)
+        self.assertEqual(set(self.closet.items()), {"cold-2"})
+
+    def test_failed_revision_registration_keeps_saved_piece_and_exact_guarded_retry(self):
+        hashes = []
+
+        def register(closet, item_id, store, **kwargs):
+            hashes.append(closet.items()[item_id]["sha256"])
+            if len(hashes) == 1:
+                return {"number": 1, "status": "imported"}
+            raise ValueError("registration failed")
+
+        with (
+            patch(
+                "mascot_wardrobe.application.inventory.register_closet_item",
+                side_effect=register,
+            ),
+            patch("mascot_wardrobe.application.inventory.closet_item_id_free", return_value=True),
+            self.assertRaisesRegex(ValueError, "registration failed") as caught,
+        ):
+            self.session(
+                *piece("cold", "classic", "#2878b5"),
+                "y",
+                "warm",
+                "3",
+                "3",
+                store=object(),
+            )
+        self.assertEqual(self.closet.items()["cold-1"]["version"], 2)
+        self.assertIn(
+            f"mascot-wardrobe inventory import-closet --root {self.closet.root} "
+            f"--item cold-1 --replaces {hashes[0]}",
+            str(caught.exception),
+        )
+
+    def test_failed_new_registration_keeps_saved_piece_with_import_retry(self):
+        with (
+            patch(
+                "mascot_wardrobe.application.inventory.register_closet_item",
+                side_effect=OSError("disk full"),
+            ),
+            patch("mascot_wardrobe.application.inventory.closet_item_id_free", return_value=True),
+            self.assertRaisesRegex(ValueError, "disk full") as caught,
+        ):
+            self.session(
+                *piece("cold", "classic", "#2878b5"),
+                store=SimpleNamespace(home=self.base / "inventory data"),
+            )
+        self.assertTrue(self.closet.item_path("cold-1").is_file())
+        self.assertIn(
+            f"inventory import-closet --root {self.closet.root} --item cold-1", str(caught.exception)
+        )
+        self.assertIn(f"MASCOT_WARDROBE_HOME='{self.base / 'inventory data'}' ", str(caught.exception))
+
+    def test_eof_during_revision_reports_already_saved_piece(self):
+        with self.assertRaisesRegex(ValueError, "saved piece.*cold-1"):
+            self.session(*piece("cold", "classic", "#2878b5"), "y")
+        self.assertTrue(self.closet.item_path("cold-1").is_file())
+
+
+class PersistentPieceTests(PieceCase):
+    def test_real_store_keeps_numbers_and_ranges_through_revision_and_another_piece(self):
+        from mascot_wardrobe.infrastructure.inventory_store import InventoryStore
+
+        store = InventoryStore.open(self.base / "data")
+        result, text, _ = self.session(
+            *piece("cold,mild", "classic", "#2878b5"),
+            "y",
+            "warm",
+            "3",
+            "3",
+            "n",
+            "y",
+            *piece("cold", "streetwear", "auto"),
+            "n",
+            "n",
+            store=store,
+        )
+        first, second = result["pieces"]
+        self.assertEqual([first["inventory"]["number"], second["inventory"]["number"]], [1, 2])
+        self.assertIn("#1", text)
+        self.assertIn("#2", text)
+        saved = store.read()
+        garment = saved.describe(1)
+        self.assertEqual(garment.version, 2)
+        self.assertEqual(garment.ranges, ("warm", "cold", "mild"))
+        self.assertEqual(garment.asset.files[0].sha256, self.digest("cold-1"))
+        self.assertEqual(len(garment.origin["history"]), 1)
+        self.assertEqual(saved.describe(2).ranges, ("cold",))
+        self.assertEqual(dict(saved.defaults), {})
+
+    def test_real_identity_preflight_skips_other_closet_id_and_preserves_first_garment(self):
+        from mascot_wardrobe.application.inventory import register_closet_item
+        from mascot_wardrobe.infrastructure.inventory_store import InventoryStore
+
+        self.closet.add_item("cold-1", "cold", ["#336699"], style="classic")
+        store = InventoryStore.open(self.base / "data")
+        register_closet_item(self.closet, "cold-1", store)
+        original = store.read().describe(1)
+        original_bytes = self.closet.item_path("cold-1").read_bytes()
+        self.closet = Closet.init(self.base / "other", self.base / "m.png", self.base / "mask.png")
+        result, text, read = self.session(
+            *piece("cold", "streetwear", "auto", "cold-1"),
+            "",
+            "n",
+            "n",
+            store=store,
+        )
+        self.assertEqual(result["pieces"][0]["id"], "cold-2")
+        self.assertEqual(result["pieces"][0]["inventory"]["number"], 2)
+        self.assertIn("collision", text.lower())
+        self.assertIn("item id [cold-2]> ", read.prompts)
+        self.assertEqual(store.read().describe(1), original)
+        self.assertEqual((self.base / "closet" / "items" / "cold-1.png").read_bytes(), original_bytes)
