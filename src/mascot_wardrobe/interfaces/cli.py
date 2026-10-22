@@ -15,7 +15,7 @@ from mascot_wardrobe.application import (
     select_outfit,
     sync_sandbox,
 )
-from mascot_wardrobe.interfaces.prompts import ask_palette, ask_style, is_interactive
+from mascot_wardrobe.interfaces.prompts import KEEP, ask_palette, ask_style, is_interactive
 from mascot_wardrobe.wardrobe import AUTO, CATEGORIES, STYLES
 from mascot_wardrobe.wardrobe.styles import validate_palette
 
@@ -117,22 +117,32 @@ def _prompt_io(read):
     return ask, write
 
 
-def _choices(args, interactive, read):
-    """Turn flags or prompt answers into the ``style`` and ``palette`` library arguments."""
+def _choices(args, interactive, read, *, keep=False):
+    """Turn flags or prompt answers into the ``style`` and ``palette`` library arguments.
+
+    With ``keep`` (closet edit) a value that is not supplied stays ``None`` (keep the stored one):
+    it is asked only when a garment attribute was supplied on an interactive run, with a
+    "keep current" option, and is never asked on a label-only edit or a non-interactive run.
+    """
     palette = args.palette
     if palette is not None:
         palette = AUTO if palette == [AUTO] else list(validate_palette(palette))
     style = args.style
+    if keep:
+        garment = any(value is not None for value in (getattr(args, "template", None), style, palette))
+        if not (garment and interactive):
+            return style, palette
+    else:
+        for name, value in (("style", style), ("palette", palette)):
+            if value is None and not interactive:
+                options = "classic, streetwear or auto" if name == "style" else "colors or auto"
+                raise ValueError(f"--{name} is required when not interactive: pass one of {options}")
     ask, write = _prompt_io(read)
-    for name, value in (("style", style), ("palette", palette)):
-        if value is None and not interactive:
-            options = "classic, streetwear or auto" if name == "style" else "colors or auto"
-            raise ValueError(f"--{name} is required when not interactive: pass one of {options}")
     if style is None:
-        style = ask_style(ask, write, allow_keep=False)
+        style = ask_style(ask, write, allow_keep=keep)
     if palette is None:
-        palette = ask_palette(ask, write, allow_keep=False)
-    return style, palette
+        palette = ask_palette(ask, write, allow_keep=keep)
+    return (None if style is KEEP else style), (None if palette is KEEP else palette)
 
 
 def _closet_parser(commands):
@@ -168,11 +178,32 @@ def _closet_parser(commands):
             help="Garment template (the six deterministic outfits)",
         )
         item.add_argument(
+            "--style",
+            choices=(*STYLES, AUTO),
+            help=(
+                "Garment style; 'auto' lets the generator choose, deterministically and locally "
+                "(from the mascot and the item id; no network, no model)"
+                + (
+                    ". Required when not interactive"
+                    if name == "add"
+                    else "; omitted keeps the stored style, even when the template changes"
+                )
+            ),
+        )
+        item.add_argument(
             "--palette",
             nargs="+",
-            required=name == "add",
             metavar="#RRGGBB",
-            help="First color: garment; last color: accent",
+            help=(
+                "One to six colors with four roles: base (first), secondary (second when there are "
+                "three or more), accent (last) and highlight (second to last when there are four or "
+                "more); or the single word 'auto' for a deterministic local choice"
+                + (
+                    ". Required when not interactive"
+                    if name == "add"
+                    else "; omitted keeps the stored palette, even when the template changes"
+                )
+            ),
         )
         item.add_argument(
             "--name",
@@ -203,7 +234,7 @@ def _closet_parser(commands):
     actions.add_parser("verify", help="Check mascot, mask and items against their recorded sha256")
 
 
-def _closet(args):
+def _closet(args, interactive=False, read=input):
     from mascot_wardrobe.closet import Closet
 
     if args.action == "init":
@@ -213,16 +244,25 @@ def _closet(args):
             "mascot_sha256": closet._data["mascot"]["sha256"],
             "mask_sha256": closet._data["mask"]["sha256"],
         }
+    style = palette = None
+    if args.action in ("add", "edit"):
+        style, palette = _choices(args, interactive, read, keep=args.action == "edit")
     closet = Closet.open(args.root)
     if args.action == "add":
         return closet.add_item(
-            args.item, args.template, args.palette, name=args.name, description=args.description or ""
+            args.item,
+            args.template,
+            palette,
+            style=style,
+            name=args.name,
+            description=args.description or "",
         )
     if args.action == "edit":
         return closet.edit_item(
             args.item,
             template=args.template,
-            palette=args.palette,
+            style=style,
+            palette=palette,
             name=args.name,
             description=args.description,
         )
@@ -319,7 +359,7 @@ def main(argv=None, *, interactive=None, read=input):
         interactive = is_interactive(False, sys.stdin, sys.stderr)
     try:
         if args.command == "closet":
-            print(json.dumps(_closet(args), ensure_ascii=False, indent=2))
+            print(json.dumps(_closet(args, interactive, read), ensure_ascii=False, indent=2))
             return 0
         if args.command == "generate":
             style, palette = _choices(args, interactive, read)

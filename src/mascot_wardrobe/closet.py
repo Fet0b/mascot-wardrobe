@@ -25,6 +25,13 @@ from mascot_wardrobe.wardrobe import (
     OutfitBrief,
     _safe_root,
 )
+from mascot_wardrobe.wardrobe.styles import (
+    AUTO_PALETTES,
+    resolve_palette,
+    resolve_style,
+    validate_provenance,
+    validate_style,
+)
 
 SCHEMA_VERSION = 1
 TILE = (192, 208)
@@ -32,7 +39,9 @@ GAP = 8
 MAX_COLUMNS = 4
 SHEET_BACKGROUND = (244, 244, 244)
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+_ITEMS_DIR = re.compile(r"items(-t[0-9]+)?")
+DEFAULT_ITEMS_DIR = "items"
+DEFAULT_STYLE = "classic"
 _MAX_PIXELS = 16_777_216
 MAX_NAME_LENGTH = 60
 MAX_DESCRIPTION_LENGTH = 500
@@ -108,6 +117,9 @@ def _with_metadata(item_id, record):
     record = json.loads(json.dumps(record))
     record.setdefault("name", _fallback_name(item_id))
     record.setdefault("description", "")
+    record.setdefault("style", DEFAULT_STYLE)
+    record.setdefault("style_choice", "default")
+    record.setdefault("palette_choice", "default")
     record["description"] = _normalize_newlines(record["description"])  # hand-edited CRLF; file untouched
     return record
 
@@ -141,14 +153,25 @@ def _wrap(text, font, width):
     return lines
 
 
-def _palette(value):
-    if (
-        not isinstance(value, (tuple, list))
-        or not 1 <= len(value) <= 6
-        or any(not isinstance(c, str) or _COLOR.fullmatch(c) is None for c in value)
-    ):
-        raise ValueError("palette needs one to six #RRGGBB colors.")
-    return tuple(value)
+def _items_dir(value):
+    """closet.json is untrusted: the items directory is one of a fixed family of names."""
+    if not isinstance(value, str) or _ITEMS_DIR.fullmatch(value) is None:
+        raise ValueError("closet.json items_dir must be 'items' or 'items-t<number>'.")
+    return value
+
+
+def _check_record_choices(item_id, record):
+    """A missing style key is a record without choices; a present one must be valid."""
+    try:
+        if "style" in record:
+            validate_style(record["style"])
+        for key in ("style_choice", "palette_choice"):
+            if key in record:
+                validate_provenance(record[key])
+    except ValueError as exc:
+        raise ValueError(
+            f"Item {item_id} has an invalid style or choice source in closet.json: {exc}"
+        ) from exc
 
 
 def _read_file(path: Path, what: str) -> bytes:
@@ -280,12 +303,15 @@ class Closet:
         return self.root / "mask" / "edit-mask.png"
 
     def item_path(self, item_id: str) -> Path:
-        return self.root / "items" / f"{_name(item_id, 'item id')}.png"
+        return self.root / self._items_dir / f"{_name(item_id, 'item id')}.png"
 
-    @staticmethod
-    def _asset(item_id: str) -> str:
+    @property
+    def _items_dir(self) -> str:
+        return _items_dir(self._data.get("items_dir", DEFAULT_ITEMS_DIR))
+
+    def _asset(self, item_id: str) -> str:
         """Canonical relative asset path; derived from the id, never taken from closet.json."""
-        return f"items/{_name(item_id, 'item id')}.png"
+        return f"{self._items_dir}/{_name(item_id, 'item id')}.png"
 
     @property
     def active(self):
@@ -322,8 +348,10 @@ class Closet:
         """Raise ValueError unless mascot, mask and every item still match their records."""
         if not isinstance(self._data["items"], dict):
             raise ValueError("closet.json items must be an object.")
+        _items_dir(self._data.get("items_dir", DEFAULT_ITEMS_DIR))  # before any path is built
         for item_id, item in self._data["items"].items():
             _check_record_labels(item_id, item)
+            _check_record_choices(item_id, item)
         source, mask = self._load_identity()
         for item_id, item in self._data["items"].items():
             if "file" in item and item["file"] != self._asset(item_id):
@@ -339,7 +367,7 @@ class Closet:
 
     # -- inventory ----------------------------------------------------------------------------
 
-    def _render(self, source, mask, template, palette) -> bytes:
+    def _render(self, source, mask, template, palette, style) -> bytes:
         if template not in CATEGORIES:
             raise ValueError(f"template must be one of: {', '.join(CATEGORIES)}.")
         width, height = source.size
@@ -347,21 +375,37 @@ class Closet:
         # Half-pixel offsets keep int(v * n) on the mask bbox despite float rounding; the compositor
         # measures the silhouette inside the mask, so the mask is its region.
         box = ((x0 + 0.5) / width, (y0 + 0.5) / height, (x1 + 0.5) / width, (y1 + 0.5) / height)
-        brief = OutfitBrief(template, palette, (), box, "closet item", region=mask)
+        brief = OutfitBrief(template, palette, (), box, "closet item", style=style, region=mask)
         dressed = LocalComposer().render(source.copy(), brief)
         result = Image.composite(dressed, source, mask)  # mask 0 keeps every source byte
         if not _protected_matches(result, source, mask):
             raise ValueError("Rendered item alters protected pixels outside the edit mask.")
         return _png_bytes(result)
 
-    def _store_item(self, item_id, template, palette, version, source, mask, name, description) -> dict:
-        data = self._render(source, mask, template, palette)
+    def _store_item(
+        self,
+        item_id,
+        template,
+        palette,
+        style,
+        style_choice,
+        palette_choice,
+        version,
+        source,
+        mask,
+        name,
+        description,
+    ) -> dict:
+        data = self._render(source, mask, template, palette, style)
         _write_atomic(self.item_path(item_id), data)
         record = {
             "name": name,
             "description": description,
             "template": template,
+            "style": style,
+            "style_choice": style_choice,
             "palette": list(palette),
+            "palette_choice": palette_choice,
             "version": version,
             "file": self._asset(item_id),
             "sha256": _sha256_bytes(data),
@@ -370,39 +414,92 @@ class Closet:
         self._save()
         return {"id": item_id, **record}
 
-    def add_item(self, item_id, template, palette, *, name=None, description="") -> dict:
+    def _seed(self, item_id) -> str:
+        return self._data["mascot"]["sha256"] + item_id
+
+    def add_item(self, item_id, template, palette=None, *, style=None, name=None, description="") -> dict:
+        """Add an item. ``None`` means the library default (classic, first curated palette);
+        ``"auto"`` resolves deterministically from the mascot hash and the item id."""
         _name(item_id, "item id")
-        palette = _palette(palette)
+        if template not in CATEGORIES:
+            raise ValueError(f"template must be one of: {', '.join(CATEGORIES)}.")
+        if style is None:
+            style, style_choice = DEFAULT_STYLE, "default"
+        else:
+            style, style_choice = resolve_style(style, template, self._seed(item_id))
+        if palette is None:
+            palette, palette_choice = AUTO_PALETTES[DEFAULT_STYLE][0], "default"
+        else:
+            palette, palette_choice = resolve_palette(palette, style, template, self._seed(item_id))
         name = _fallback_name(item_id) if name is None else _display_name(name)
         description = _description(description)
         source, mask = self._load_identity()
         self.verify()
         if item_id in self._data["items"]:
             raise ValueError(f"Item {item_id} already exists; use edit.")
-        return self._store_item(item_id, template, palette, 1, source, mask, name, description)
+        return self._store_item(
+            item_id,
+            template,
+            palette,
+            style,
+            style_choice,
+            palette_choice,
+            1,
+            source,
+            mask,
+            name,
+            description,
+        )
 
-    def edit_item(self, item_id, *, template=None, palette=None, name=None, description=None) -> dict:
-        """Change garment (new version, re-rendered) and/or labels (no version or pixel change)."""
+    def edit_item(
+        self, item_id, *, template=None, style=None, palette=None, name=None, description=None
+    ) -> dict:
+        """Change garment (new version, re-rendered), choice sources (record only) and/or labels.
+
+        ``None`` keeps the stored value, even when the template changes; only an explicit ``"auto"``
+        re-resolves, using the new template and style.
+        """
         source, mask = self._load_identity()
         self.verify()
         current = _with_metadata(item_id, self._item(item_id))
         new_name = current["name"] if name is None else _display_name(name)
         new_description = current["description"] if description is None else _description(description)
         new_template = current["template"] if template is None else template
-        new_palette = current["palette"] if palette is None else list(_palette(palette))
-        garment_same = new_template == current["template"] and new_palette == current["palette"]
+        if new_template not in CATEGORIES:
+            raise ValueError(f"template must be one of: {', '.join(CATEGORIES)}.")
+        seed = self._seed(item_id)
+        new_style, style_choice = current["style"], current["style_choice"]
+        if style is not None:
+            new_style, style_choice = resolve_style(style, new_template, seed)
+        new_palette, palette_choice = current["palette"], current["palette_choice"]
+        if palette is not None:
+            resolved, palette_choice = resolve_palette(palette, new_style, new_template, seed)
+            new_palette = list(resolved)
+        garment_same = (new_template, new_style, new_palette) == (
+            current["template"],
+            current["style"],
+            current["palette"],
+        )
+        choices_same = (style_choice, palette_choice) == (current["style_choice"], current["palette_choice"])
         labels_same = (new_name, new_description) == (current["name"], current["description"])
-        if garment_same and labels_same:
-            raise ValueError("Nothing to change: template, palette, name and description are identical.")
-        if garment_same:  # labels only: the saved PNG, its hash and the version stay as they are
+        if garment_same and choices_same and labels_same:
+            raise ValueError(
+                "Nothing to change: template, style, palette, name and description are identical."
+            )
+        if garment_same:  # metadata only: the saved PNG, its hash and the version stay as they are
             record = self._data["items"][item_id]
             record["name"], record["description"] = new_name, new_description
+            record["style"], record["palette"] = new_style, list(new_palette)
+            record["style_choice"], record["palette_choice"] = style_choice, palette_choice
             self._save()
             return {"id": item_id, **_with_metadata(item_id, record)}
         return self._store_item(
             item_id,
             new_template,
             tuple(new_palette),
+            new_style,
+            style_choice,
+            palette_choice,
             current["version"] + 1,
             source,
             mask,

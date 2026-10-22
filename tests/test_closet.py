@@ -704,3 +704,179 @@ class RealMaskFitTests(FitAssertions, unittest.TestCase):
             (base / "closet" / "closet.json").write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "renderer configuration changed"):
                 Closet.open(base / "closet")
+
+
+class ClosetChoiceTests(ClosetCase):
+    def setUp(self):
+        super().setUp()
+        self.closet = self.make()
+
+    def record(self, item_id="coat"):
+        return json.loads((self.root / "closet.json").read_text())["items"][item_id]
+
+    def test_record_stores_style_palette_and_provenance(self):
+        added = self.closet.add_item("coat", "cold", ("#2878b5", "#e8b84b"), style="streetwear")
+        stored = self.record()
+        self.assertEqual(stored["style"], "streetwear")
+        self.assertEqual(stored["palette"], ["#2878b5", "#e8b84b"])
+        self.assertEqual((stored["style_choice"], stored["palette_choice"]), ("user", "user"))
+        self.assertEqual(added["style"], "streetwear")
+
+    def test_library_defaults_stay_classic_and_existing_calls_work(self):
+        self.closet.add_item("coat", "cold", ("#2878b5",))
+        stored = self.record()
+        self.assertEqual(
+            (stored["style"], stored["style_choice"], stored["palette_choice"]),
+            ("classic", "default", "user"),
+        )
+        self.closet.add_item("tee", "ambient")
+        stored = self.record("tee")
+        self.assertEqual((stored["style_choice"], stored["palette_choice"]), ("default", "default"))
+
+    def test_auto_is_deterministic_per_mascot_and_item_id(self):
+        first = self.closet.add_item("coat", "cold", "auto", style="auto")
+        self.assertEqual((first["style_choice"], first["palette_choice"]), ("auto", "auto"))
+        from mascot_wardrobe.closet import Closet
+        from mascot_wardrobe.wardrobe.styles import resolve_palette, resolve_style
+
+        seed = sha(self.mascot) + "coat"
+        style, _ = resolve_style("auto", "cold", seed)
+        palette, _ = resolve_palette("auto", style, "cold", seed)
+        self.assertEqual((first["style"], tuple(first["palette"])), (style, palette))
+        other = Closet.init(self.base / "other", self.mascot, self.mask)
+        again = other.add_item("coat", "cold", "auto", style="auto")
+        self.assertEqual(again["sha256"], first["sha256"])
+
+    def test_invalid_values_change_nothing(self):
+        before = (self.root / "closet.json").read_bytes()
+        for kwargs in ({"style": "grunge"}, {"palette": ("#12",)}, {"palette": ()}, {"palette": "red"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.closet.add_item("coat", "cold", **{"palette": ("#2878b5",), **kwargs})
+        self.assertEqual((self.root / "closet.json").read_bytes(), before)
+        self.assertFalse((self.root / "items" / "coat.png").exists())
+
+    def test_edit_style_bumps_version_and_rerenders(self):
+        added = self.closet.add_item("coat", "cold", ("#2878b5", "#e8b84b"))
+        edited = self.closet.edit_item("coat", style="streetwear")
+        self.assertEqual(
+            (edited["version"], edited["style"], edited["style_choice"]), (2, "streetwear", "user")
+        )
+        self.assertNotEqual(edited["sha256"], added["sha256"])
+
+    def test_edit_palette_is_a_garment_change(self):
+        self.closet.add_item("coat", "cold", ("#2878b5",))
+        edited = self.closet.edit_item("coat", palette=("#aa2222",))
+        self.assertEqual(edited["version"], 2)
+
+    def test_edit_auto_landing_on_stored_values_changes_only_provenance(self):
+        from mascot_wardrobe.wardrobe.styles import resolve_palette, resolve_style
+
+        seed = sha(self.mascot) + "coat"
+        style, _ = resolve_style("auto", "cold", seed)
+        palette, _ = resolve_palette("auto", style, "cold", seed)
+        added = self.closet.add_item("coat", "cold", palette, style=style)
+        self.closet.save_wardrobe("w", ["coat"])
+        item = self.closet.item_path("coat")
+        stamp = item.stat().st_mtime_ns
+        edited = self.closet.edit_item("coat", style="auto", palette="auto")
+        self.assertEqual((edited["style_choice"], edited["palette_choice"]), ("auto", "auto"))
+        self.assertEqual((edited["version"], edited["sha256"]), (1, added["sha256"]))
+        self.assertEqual(item.stat().st_mtime_ns, stamp)
+        self.assertEqual(self.record()["style_choice"], "auto")
+        self.closet.use_wardrobe("w")  # wardrobe still valid
+        from mascot_wardrobe.closet import Closet
+
+        Closet.open(self.root)
+
+    def test_fully_identical_edit_is_nothing_to_change(self):
+        self.closet.add_item("coat", "cold", ("#2878b5",), style="classic")
+        with self.assertRaisesRegex(ValueError, "Nothing to change.*style.*palette"):
+            self.closet.edit_item("coat", style="classic", palette=("#2878b5",))
+        with self.assertRaisesRegex(ValueError, "Nothing to change"):
+            self.closet.edit_item("coat")
+
+    def test_template_change_keeps_stored_style_and_palette(self):
+        self.closet.add_item("coat", "cold", "auto", style="auto")
+        stored = self.record()
+        edited = self.closet.edit_item("coat", template="warm")
+        self.assertEqual(edited["version"], 2)
+        self.assertEqual((edited["style"], edited["palette"]), (stored["style"], stored["palette"]))
+        self.assertEqual((edited["style_choice"], edited["palette_choice"]), ("auto", "auto"))
+
+    def test_explicit_auto_reresolves_with_the_new_template(self):
+        self.closet.add_item("coat", "cold", ("#2878b5",), style="classic")
+        from mascot_wardrobe.wardrobe.styles import resolve_palette
+
+        edited = self.closet.edit_item("coat", template="warm", palette="auto")
+        seed = sha(self.mascot) + "coat"
+        self.assertEqual(tuple(edited["palette"]), resolve_palette("auto", "classic", "warm", seed)[0])
+
+    def test_protected_pixels_stay_identical_for_every_style(self):
+        source = Image.open(self.mascot).convert("RGBA")
+        mask = Image.open(self.mask)
+        protected = Image.eval(mask, lambda v: 255 if v == 0 else 0)
+        blank = Image.new("RGBA", source.size)
+        for style in ("classic", "streetwear"):
+            item = self.closet.add_item(
+                f"{style}-coat", "cold", ("#101014", "#4920A8", "#9B4DFF", "#DDC5FF"), style=style
+            )
+            out = Image.open(self.closet.item_path(item["id"])).convert("RGBA")
+            self.assertEqual(
+                Image.composite(out, blank, protected).tobytes(),
+                Image.composite(source, blank, protected).tobytes(),
+            )
+
+    def test_items_dir_defaults_and_is_validated(self):
+        from mascot_wardrobe.closet import Closet
+
+        self.closet.add_item("coat", "cold", ("#2878b5",))
+        path = self.root / "closet.json"
+        original = path.read_text()
+        for bad in ("../x", str(self.base / "x"), "items/..", "items-tx", "other", "", 5):
+            with self.subTest(items_dir=bad):
+                data = json.loads(original)
+                data["items_dir"] = bad
+                path.write_text(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "items_dir"):
+                    Closet.open(self.root)
+
+    def test_items_dir_redirects_item_paths(self):
+        from mascot_wardrobe.closet import Closet
+
+        self.closet.add_item("coat", "cold", ("#2878b5",))
+        self.closet.save_wardrobe("w", ["coat"])
+        (self.root / "items-t3").mkdir()
+        (self.root / "items-t3" / "coat.png").write_bytes((self.root / "items" / "coat.png").read_bytes())
+        path = self.root / "closet.json"
+        data = json.loads(path.read_text())
+        data["items_dir"] = "items-t3"
+        data["items"]["coat"]["file"] = "items-t3/coat.png"
+        path.write_text(json.dumps(data))
+        closet = Closet.open(self.root)
+        self.assertEqual(closet.item_path("coat"), self.root / "items-t3" / "coat.png")
+        self.assertEqual(closet.build_catalog("w")["tiles"][0]["asset"], "items-t3/coat.png")
+        closet.save_wardrobe("w2", ["coat"])
+        with self.assertRaises(ValueError):
+            closet.remove_item("coat")
+        extra = closet.add_item("hat", "warm", ("#2878b5",))
+        self.assertEqual(extra["file"], "items-t3/hat.png")
+        self.assertTrue((self.root / "items-t3" / "hat.png").exists())
+        closet.remove_item("hat")
+        self.assertFalse((self.root / "items-t3" / "hat.png").exists())
+
+    def test_real_mask_fit_flow_for_every_template(self):
+        from mascot_wardrobe.closet import Closet
+        from mascot_wardrobe.wardrobe import CATEGORIES
+
+        mascot = ROOT / "examples" / "mascot.png"
+        source = Image.open(mascot).convert("RGBA")
+        mask_path = self.base / "real-mask.png"
+        box = pixel_box(EXAMPLE_BODY_BOX, source.size)
+        mask = rect_region(source, box)
+        mask.save(mask_path)
+        closet = Closet.init(self.base / "real", mascot, mask_path)
+        for style in ("classic", "streetwear"):
+            for template in CATEGORIES:
+                item = closet.add_item(f"{style}-{template}".replace("_", "-"), template, PROBE, style=style)
+                out = Image.open(closet.item_path(item["id"])).convert("RGBA")
+                self.assertNotEqual(out.tobytes(), source.tobytes())
