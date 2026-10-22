@@ -690,6 +690,18 @@ class FitAssertions:
                 1 for x in range(got[1] + 1, right + 1) if sil[x]
             )
 
+        def bare_limits(y, edge, sleeved):
+            """Allow only the modeled distal hand portion outside a streetwear sleeve."""
+            if style != "streetwear" or not sleeved or fit.torso[y] is None:
+                return inset + 1, inset + 1
+            share = composer.SLEEVE_SHARE[style][index]
+            left_reach = max(0, fit.torso[y][0] - edge[0])
+            right_reach = max(0, edge[1] - fit.torso[y][1])
+            return (
+                left_reach - round(left_reach * share) + inset + 1,
+                right_reach - round(right_reach * share) + inset + 1,
+            )
+
         # neckline: no bare gap right under the collar
         row = fit.neck_row + dip + 1
         torso = fit.torso[row]
@@ -706,8 +718,9 @@ class FitAssertions:
         in_sleeve = span is not None and span[0] <= fit.shoulder_row <= span[1]
         edge = fit.extents[fit.shoulder_row] if in_sleeve else fit.torso[fit.shoulder_row]
         left_bare, right_bare = bare(fit.shoulder_row, *edge)
-        self.assertLessEqual(left_bare, inset + 1, f"{label}: left shoulder")
-        self.assertLessEqual(right_bare, inset + 1, f"{label}: right shoulder")
+        left_limit, right_limit = bare_limits(fit.shoulder_row, edge, in_sleeve)
+        self.assertLessEqual(left_bare, left_limit, f"{label}: left shoulder")
+        self.assertLessEqual(right_bare, right_limit, f"{label}: right shoulder")
 
         # sides and sleeves, row by row from the shoulders to the hem
         for y in range(fit.shoulder_row, fit.hem_row + 1):
@@ -715,9 +728,11 @@ class FitAssertions:
             if torso is None or in_armhole(y):
                 continue
             sleeved = span is not None and span[0] <= y <= span[1]
-            left_bare, right_bare = bare(y, *(fit.extents[y] if sleeved else torso))
-            self.assertLessEqual(left_bare, inset + 1, f"{label}: bare left side at row {y}")
-            self.assertLessEqual(right_bare, inset + 1, f"{label}: bare right side at row {y}")
+            edge = fit.extents[y] if sleeved else torso
+            left_bare, right_bare = bare(y, *edge)
+            left_limit, right_limit = bare_limits(y, edge, sleeved)
+            self.assertLessEqual(left_bare, left_limit, f"{label}: bare left side at row {y}")
+            self.assertLessEqual(right_bare, right_limit, f"{label}: bare right side at row {y}")
         if armhole:  # the armhole is cut at the sides below the shoulder row
             y = fit.shoulder_row + 1 + armhole_rows
             got = row_span(gm, y)
@@ -820,12 +835,12 @@ class FitTests(FitAssertions, unittest.TestCase):
         result = LocalComposer().render(opaque, OutfitBrief("cold", PROBE, (), box, "t", region=mask))
         self.assertIsNotNone(garment_mask(opaque, result).getbbox())
 
-    def test_cache_config_is_template_revision_four(self):
+    def test_cache_config_is_template_revision_five(self):
         from mascot_wardrobe.wardrobe import LocalComposer
 
         self.assertEqual(
             LocalComposer.cache_config,
-            {"renderer": "local-composer", "templates": 4, "styles": ["classic", "streetwear"]},
+            {"renderer": "local-composer", "templates": 5, "styles": ["classic", "streetwear"]},
         )
 
     def test_a_templates_two_manifest_is_rejected_with_a_regenerate_message(self):
@@ -964,9 +979,9 @@ class StreetwearTests(unittest.TestCase):
         fit = measure_fit(source.getchannel("A").crop(px), None)
         w = px[2] - px[0]
         self.assertLess(composer.side_inset("streetwear", w), composer.side_inset("classic", w))
-        self.assertGreater(
-            composer.sleeve_span(3, fit, "streetwear")[0], composer.sleeve_span(3, fit, "classic")[0]
-        )
+        self.assertIsNotNone(composer.sleeve_span(3, fit, "streetwear"))
+        self.assertIsNotNone(composer.sleeve_span(3, fit, "classic"))
+        self.assertGreater(composer.SLEEVE_SHARE["streetwear"][0], composer.SLEEVE_SHARE["streetwear"][3])
         for index in (4, 5):
             self.assertGreater(
                 composer.armhole("streetwear", index)[0], composer.armhole("classic", index)[0]

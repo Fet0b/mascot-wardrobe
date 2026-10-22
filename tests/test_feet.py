@@ -45,7 +45,8 @@ def test_supplied_source_detects_two_feet_and_gets_shoes():
     assert ImageChops.multiply(overlay.getchannel("A"), outline).getbbox() is None
     for mask in masks:
         pixels = Image.composite(overlay, Image.new("RGBA", source.size), mask)
-        colors = {p[:3] for p in pixels.getdata() if p[3] == 255}
+        rgba = pixels.tobytes()
+        colors = {tuple(rgba[i : i + 3]) for i in range(0, len(rgba), 4) if rgba[i + 3] == 255}
         assert {(16, 16, 20), (73, 32, 168), (221, 197, 255)} <= colors
     assert (
         ImageChops.difference(composer.LocalComposer().render(source, brief()), source)
@@ -98,17 +99,20 @@ def test_only_detected_foot_interiors_change_and_explicit_protection_wins(real):
     assert paint.getbbox()
     assert ImageChops.subtract(paint, allowed).getbbox() is None
     assert ImageChops.subtract(paint, edit).getbbox() is None
-    assert all(a == 255 for a, p in zip(alpha.getdata(), paint.getdata(), strict=True) if p)
+    assert all(a == 255 for a, p in zip(alpha.tobytes(), paint.tobytes(), strict=True) if p)
     output = composer.LocalComposer().render(source, brief(edit))
     with patch.object(composer, "shoe_overlay", return_value=Image.new("RGBA", source.size)):
         without_shoes = composer.LocalComposer().render(source, brief(edit))
     changed = ImageChops.difference(output, without_shoes).convert("RGB").getbbox()
     assert changed
-    for before, after, permitted, editable in zip(
-        without_shoes.getdata(), output.getdata(), allowed.getdata(), edit.getdata(), strict=True
-    ):
-        if not permitted or not editable:
-            assert before == after
+    before_data = without_shoes.tobytes()
+    after_data = output.tobytes()
+    allowed_data = allowed.tobytes()
+    edit_data = edit.tobytes()
+    for pixel in range(source.width * source.height):
+        start = pixel * 4
+        if not allowed_data[pixel] or not edit_data[pixel]:
+            assert before_data[start : start + 4] == after_data[start : start + 4]
     assert output.getchannel("A").tobytes() == alpha.tobytes()
     # Blocking a foot must not change detection or invent another pair from the cut mask.
     assert shoe_overlay(alpha, palette_roles(PALETTE), Image.new("L", source.size)).getbbox() is None

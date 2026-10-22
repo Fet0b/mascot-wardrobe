@@ -93,10 +93,10 @@ NECK_DIP = (0.15, 0.15, 0.15, 0.15, 0.15, 0.24)  # neckline depth below ``fit.ne
 NECK_REACH = 0.34  # the neckline never opens wider than this share of the widest torso row
 SIDE_INSET = {"classic": 0.01, "streetwear": 0.0}  # garment edge margin inside the silhouette, of w
 SLEEVE_SHARE = {
-    "classic": (1.0, 1.0, 1.0, 0.4, 0.0, 0.0),  # share of the arm nub the sleeve covers
-    "streetwear": (1.0, 1.0, 1.0, 0.55, 0.0, 0.0),  # oversized: longer short sleeves
+    "classic": (1.0, 1.0, 1.0, 0.4, 0.0, 0.0),  # legacy vertical sleeve reach
+    "streetwear": (0.72, 0.72, 0.72, 0.35, 0.0, 0.0),  # horizontal reach; leave hand tips bare
 }
-SHOULDER_DROP = {"classic": 0.0, "streetwear": 0.1}  # share of the arm nub left bare under the shoulder
+SHOULDER_DROP = {"classic": 0.0, "streetwear": 0.0}  # share of the arm nub left bare under the shoulder
 ARMHOLES = {  # (depth of h, reach of w) for sleeveless garments
     "classic": {4: (0.2, 0.1), 5: (0.22, 0.11)},
     "streetwear": {4: (0.27, 0.13), 5: (0.29, 0.14)},
@@ -109,6 +109,7 @@ LEGACY_RENDERER_CONFIG = {"renderer": "local-composer", "templates": 2}  # fixed
 PRIOR_RENDERER_CONFIGS = (
     LEGACY_RENDERER_CONFIG,
     {"renderer": "local-composer", "templates": 3, "styles": list(STYLES)},
+    {"renderer": "local-composer", "templates": 4, "styles": list(STYLES)},
 )
 
 
@@ -130,7 +131,8 @@ def armhole(style: str, index: int) -> tuple[float, float] | None:
 def sleeve_span(index: int, fit: Fit, style: str = "classic") -> tuple[int, int] | None:
     """First and last row of the sleeve, or None when the garment has no sleeve or no arm nub.
 
-    A dropped shoulder (streetwear) starts the sleeve lower on the arm nub.
+    For streetwear, the horizontal share determines sleeve length; detected rows are all covered.
+    Classic templates retain their historical vertical share behavior.
     """
     rows = [
         y
@@ -141,6 +143,8 @@ def sleeve_span(index: int, fit: Fit, style: str = "classic") -> tuple[int, int]
     if not rows or SLEEVE_SHARE[style][index] == 0:
         return None
     top, bottom = rows[0], rows[-1]
+    if style == "streetwear":
+        return top, bottom
     end = top + max(1, round(SLEEVE_SHARE[style][index] * (bottom - top + 1))) - 1
     return min(top + round(SHOULDER_DROP[style] * (bottom - top + 1)), end), end
 
@@ -169,7 +173,7 @@ class LocalComposer:
     ``cache_config`` is part of the cache binding: bump ``templates`` whenever the pixels change.
     """
 
-    cache_config = {"renderer": "local-composer", "templates": 4, "styles": list(STYLES)}
+    cache_config = {"renderer": "local-composer", "templates": 5, "styles": list(STYLES)}
 
     def render(self, source: Image.Image, brief: OutfitBrief) -> Image.Image:
         _validate_brief(source, brief)
@@ -226,13 +230,24 @@ def _shape(index: int, style: str, fit: Fit, w: int, h: int) -> _Shape:
     )
 
 
-def _row_edges(y: int, shape: _Shape, fit: Fit) -> tuple[int, int] | None:
-    """Garment columns [left, right) of one row: torso or, on sleeve rows, the whole silhouette."""
+def _row_edges(y: int, shape: _Shape, fit: Fit, index: int, style: str) -> tuple[int, int] | None:
+    """Garment columns [left, right) for the torso and fitted sleeve reach."""
     sleeved = shape.sleeve is not None and shape.sleeve[0] <= y <= shape.sleeve[1]
-    edge = fit.extents[y] if sleeved else fit.torso[y]
-    if edge is None:
-        return None
-    left, right = edge[0], edge[1] + 1
+    torso = fit.torso[y]
+    if sleeved and style == "streetwear":
+        extent = fit.extents[y]
+        if extent is None or torso is None:
+            return None
+        share = SLEEVE_SHARE[style][index]
+        left_reach = max(0, torso[0] - extent[0])
+        right_reach = max(0, extent[1] - torso[1])
+        left = torso[0] - round(left_reach * share)
+        right = torso[1] + round(right_reach * share) + 1
+    else:
+        edge = fit.extents[y] if sleeved else torso
+        if edge is None:
+            return None
+        left, right = edge[0], edge[1] + 1
     if right - left > 2 * shape.inset:  # tiny rows at the hem keep their full width
         left, right = left + shape.inset, right - shape.inset
     return left, right
@@ -278,7 +293,7 @@ def _coverage(index: int, style: str, fit: Fit, w: int, h: int) -> Image.Image:
     shape = _shape(index, style, fit, w, h)
     canvas = _Canvas(w, h, "L")
     for y in range(fit.neck_row, fit.hem_row + 1):
-        edges = _row_edges(y, shape, fit)
+        edges = _row_edges(y, shape, fit, index, style)
         if edges is not None:
             canvas.rect(edges[0], y, edges[1], y + 1, 255)
     if (opening := armhole(style, index)) is not None:

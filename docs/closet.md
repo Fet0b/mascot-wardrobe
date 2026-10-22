@@ -17,6 +17,15 @@ with reusable items. It never regenerates or redraws the character: the existing
 - The garment templates are fitted to the silhouette inside the editable mask area (the mask is
   the silhouette, so an opaque mascot works here). Pixels inside the box but outside the mask stay
   untouched. See "Fit" in [wardrobe.md](wardrobe.md).
+- Optional fit box: `closet init ... --body-box X1 Y1 X2 Y2` (or `Closet.init(..., body_box=...)`)
+  stores a normalized garment fit box (four finite floats within 0..1, `X1 < X2`, `Y1 < Y2`) in
+  `closet.json`. It is independent from the paint/edit mask: the mask says where pixels may change,
+  while the fit box says where the body is. A mask often reaches further than the body (for example
+  head-protected shoulders, or detected feet that should stay unshod), so deriving the fit from the
+  mask bounding box can make garments too tall or pull them over the shoes. The stored box is used
+  for every render and re-render, and is validated each time the closet is opened. Without it (all
+  closets made before this option, or when omitted) the field is absent from `closet.json` and the fit
+  box is still derived from the mask bounding box, exactly as before. It cannot be changed after init.
 
 ## Layout and versioning
 
@@ -26,12 +35,12 @@ closet/
   mascot/source.png    the immutable mascot (verbatim copy)
   mask/edit-mask.png   the explicit edit mask (verbatim copy)
   items/<id>.png       saved item portraits (same size as the mascot)
-  items-t4/<id>.png    item portraits after `closet migrate` (see below); `items_dir` names the live one
+  items-t5/<id>.png    item portraits after `closet migrate` (see below); `items_dir` names the live one
   backups/             closet-templates-<old-revision>-<n>.json, written by `closet migrate`
   catalog/<name>.png   contact sheet; catalog/<name>.json lists its tiles
 ```
 
-`closet.json` pins the mascot and mask hashes, the renderer `cache_config` (`templates: 4`), the
+`closet.json` pins the mascot and mask hashes, the renderer `cache_config` (`templates: 5`), the
 `items_dir`, and per item its template, `style`, `palette`, the provenance of each
 (`style_choice`, `palette_choice`), `version` and file hash. Every command re-hashes mascot, mask and all items
 and fails with `changed ... sha256 mismatch` (exit code 2) if anything differs, so a swapped base
@@ -202,7 +211,7 @@ Two different fingerprints are involved, on purpose:
 
 ## Upgrading an older closet
 
-A closet made by the supported prior renderers (`templates: 2` or `templates: 3`) cannot be opened by this version: the
+A closet made by the supported prior renderers (`templates: 2`, `templates: 3`, or `templates: 4`) cannot be opened by this version: the
 error points to `closet migrate`.
 
 ```
@@ -212,21 +221,21 @@ mascot-wardrobe closet --root DIR migrate
 
 - Preserved: item ids, names, descriptions, templates, palettes, versions, wardrobes, the mascot,
   the mask and their hashes. Revision-2 items become `classic` with provenance `migrated` for style and
-  palette. Revision-3 items retain their style and both choice provenances. All items are
+  palette. Revision-3 and revision-4 items retain their style and both choice provenances. All items are
   re-rendered, so item hashes can change; `migrated_from` pins the actual prior renderer and hash. Each wardrobe is repinned
   to the new hashes and its `revision` goes up by one.
 - The old `closet.json` is copied first to `backups/closet-templates-<old-revision>-<n>.json` (never
-  overwriting an earlier backup). New items are written to `items-t4/`; the old `items/` or `items-t3/` and
+  overwriting an earlier backup). New items are written to `items-t5/`; old `items/`, `items-t3/`, or `items-t4/` directories and
   `catalog/` are left untouched. Only the known prior renderer configurations are accepted;
-  revision 2 requires `items/`, while revision 3 accepts `items/` or `items-t3/`.
+  revision 2 requires `items/`, while revision 3 accepts `items/` or `items-t3/`; revision 4 accepts `items/` or `items-t4/`.
 - Atomic: `closet.json` is replaced once, after the new items are written and verified in memory.
   If the final re-open check fails, the original `closet.json` is restored. An interrupted run
-  leaves the old `closet.json` live, and the next run overwrites leftovers in `items-t4/`.
+  leaves the old `closet.json` live, and the next run overwrites leftovers in `items-t5/`.
 - Refused, with nothing changed: a tampered old item, a changed mascot or mask, an unknown renderer
   configuration, or wardrobes that do not match their items. A closet that is already current
   reports "already current"; running `migrate` twice is a no-op the second time.
 - Catalog sheets made before the migration are stale; rebuild them with `closet catalog`.
-- The same applies to `generate`: a `templates: 2` or `templates: 3` catalog is rejected; regenerate into a new
+- The same applies to `generate`: a `templates: 2`, `templates: 3`, or `templates: 4` catalog is rejected; regenerate into a new
   output directory.
 
 Streetwear sneakers use source-alpha foot detection independently of the torso fit and still

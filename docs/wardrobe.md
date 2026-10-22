@@ -110,9 +110,9 @@ measure), or inconsistent measurements. Move the body box over the body, use a t
 or use a closet edit mask: with an explicit mask the mask is the silhouette, so an opaque mascot
 works in the closet flow. The CLI reports `FitError` as an `error:` line with exit code 2.
 
-The renderer exposes `cache_config = {"renderer": "local-composer", "templates": 4, "styles":
+The renderer exposes `cache_config = {"renderer": "local-composer", "templates": 5, "styles":
 ["classic", "streetwear"]}`. It is stored in the manifest, so a catalog made by an older template
-revision (`templates: 2` or `templates: 3`) is rejected with a message to regenerate into a new output directory.
+revision (`templates: 2`, `templates: 3`, or `templates: 4`) is rejected with a message to regenerate into a new output directory.
 Change `templates` whenever the pixels of any outfit change.
 
 The palette comes from your choice, or from the country profile when a library caller passes none.
