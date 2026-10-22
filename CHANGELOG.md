@@ -7,6 +7,17 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Style and palette choices: `generate` and `closet add`/`edit` take `--style`
+  (`classic`, `streetwear` or `auto`) and `--palette` (one to six `#RRGGBB` colours, or `auto`),
+  with four palette roles (base, secondary, accent, highlight). `auto` is deterministic and local.
+  On a terminal missing values are asked with prompts; the global `--no-input` flag forces the
+  non-interactive rules. Choices and their provenance (`user`, `auto`, `default`, `profile`,
+  `migrated`) are recorded in `manifest.json` and `closet.json`.
+- `streetwear` style, built from fitted geometric layers. No external reference images are sent
+  or fetched.
+- `mascot-wardrobe closet migrate [--dry-run]`: upgrades a template-set-2 closet to the current
+  renderer atomically, with a backup in `backups/closet-templates-2-<n>.json`, new items in
+  `items-t3/` and the old `items/` and `catalog/` left untouched.
 - `mascot-wardrobe closet` (`init`, `add`, `edit`, `remove`, `save`, `use`, `catalog`, `list`,
   `verify`): an identity-locked closet. One user mascot and an explicit binary edit mask are
   copied verbatim and pinned by sha256; items are rendered by the existing `LocalComposer` with
@@ -24,6 +35,19 @@ All notable changes are documented here. The format follows
   examples in `examples/publish/`. ADR 0003 amended; the sandbox channel is unchanged.
 - `docs/integration.md`: clean install, verification, dry-run versus `--apply`, channel
   prerequisites, rollback, and the boundary with a separately installed Hermes scheduler.
+
+### Changed
+
+- Template revision 3: garments are fitted to the silhouette measured from the image (neck,
+  shoulders, torso, hem) instead of fixed fractions of the box, and are built from clipped layers.
+  Catalogs and closets from template revision 2 are rejected: regenerate into a new directory, or
+  run `closet migrate` for a closet.
+- A fully opaque body box now fails with a clear `FitError` (exit 2) unless a closet edit mask is
+  used; an empty or tiny silhouette fails the same way.
+- `closet add --palette` is optional (library default or prompt); `closet edit` keeps stored
+  style and palette when they are omitted.
+- Non-interactive `generate` and `closet add` require explicit `--style` and `--palette`
+  (exit 2 otherwise); pass `--style classic --palette auto` in scripts.
 
 ### Fixed
 

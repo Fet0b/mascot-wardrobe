@@ -87,8 +87,9 @@ must be at most 256 KiB of JSON:
 
 - The key is a two-letter uppercase country code. `thresholds_c` has five finite, strictly
   increasing Celsius numbers; `palette` and `garments` each need exactly six entries, one per
-  category in order. The default compositor paints every outfit with the first palette color
-  and uses the last one as the accent, and it does not read the garment text (see
+  category in order. The profile palette is used when a library caller passes no palette
+  (`generate` on the CLI always takes `--palette`); the default compositor maps colours to
+  base, secondary, accent and highlight roles and does not read the garment text (see
   `wardrobe.md`); a custom `Renderer` may use the per-category entries.
 - An unknown country fails with an error that asks for a reviewed custom profiles file.
 - The manifest records the country; `select` refuses a manifest generated for another country.

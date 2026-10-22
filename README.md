@@ -43,7 +43,7 @@ body box with your own to use your own mascot.
 # 1. Generate six outfits once (country is always explicit; no geolocation).
 # The example mascot ships with its own explicit body box (arms to hem, below the head).
 mascot-wardrobe generate --mascot examples/mascot.png --id sunny --country BR \
-  --body-box 0.125 0.555 0.875 0.915
+  --body-box 0.125 0.555 0.875 0.915 --style classic --palette auto
 
 # 2. Select by temperature as often as you like (28 C is "warm" in the BR preset).
 mascot-wardrobe select --manifest mascot-wardrobe-out/catalog/manifest.json \
@@ -59,20 +59,25 @@ mascot-wardrobe demo --manifest mascot-wardrobe-out/catalog/manifest.json \
 Files are copied to `mascot-wardrobe-out/exports/<channel>/<slug>/`.
 
 Use `--body-box X1 Y1 X2 Y2` (normalized, default `0.22 0.60 0.78 0.88`) to tell the compositor
-where your mascot's body is: the templates are fitted to that box (sleeves, hem, neckline), they
-do not detect anatomy. See [docs/wardrobe.md](docs/wardrobe.md).
+where your mascot's body is: the templates are fitted to the silhouette measured inside that box
+(neckline, shoulders, sleeves, hem); there is no face or limb detection. `--style` (`classic` or
+`streetwear`) and `--palette` (one to six `#RRGGBB` colours, or `auto`) are asked on a terminal and
+required otherwise (exit 2, nothing written), so scripts pass them explicitly. `auto` is
+deterministic and local; no reference images are sent or fetched. See
+[docs/wardrobe.md](docs/wardrobe.md).
 
 ## Identity-locked closet
 
 `mascot-wardrobe closet` keeps one mascot as an immutable, hash-pinned source and an explicit
 binary edit mask, lets you add, edit and remove clothing items, save and switch named wardrobes,
 and builds a catalog sheet from the saved item files. Pixels outside the mask are verified
-byte-identical to the source, and a changed mascot, mask or item is detected. See
+byte-identical to the source, and a changed mascot, mask or item is detected. A closet made by an
+older release is upgraded with `closet migrate [--dry-run]` (backup, atomic). See
 [docs/closet.md](docs/closet.md).
 
 ```bash
 mascot-wardrobe closet init --mascot mascot.png --mask mask.png
-mascot-wardrobe closet add coat --template very_cold --palette "#2878b5" "#e8b84b"
+mascot-wardrobe closet add coat --template very_cold --style classic --palette "#2878b5" "#e8b84b"
 mascot-wardrobe closet save winter --items coat
 mascot-wardrobe closet use winter && mascot-wardrobe closet catalog
 ```
@@ -144,10 +149,11 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 
 - No semantic understanding: the compositor is geometric. It does not detect faces or limbs
   and it does not draw realistic clothing.
-- Overlays are rectangular shapes clipped to the body box you provide. A wrong box gives a
-  wrong result.
-- Opaque PNGs: existing transparency is preserved, but an opaque background is not removed.
-  Overlays are painted inside the body box only.
+- Overlays are geometric shapes fitted to the silhouette inside the body box you provide. A wrong
+  box gives a wrong result.
+- Opaque PNGs: existing transparency is preserved, but an opaque background is not removed. A body
+  box that is fully opaque fails with a clear `FitError` (exit 2) unless a closet edit mask is
+  used; use a transparent PNG or the closet.
 - Country presets are product defaults, not meteorological or health standards, and one country
   can have many climates.
 - Sandbox channels are export-only: a file and loopback test fixture, not a real account.

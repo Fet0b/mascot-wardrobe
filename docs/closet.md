@@ -14,8 +14,9 @@ with reusable items. It never regenerates or redraws the character: the existing
 - Each item is `composite(garment render, source, mask)`: protected pixels are taken from the
   source, then re-checked to be byte-identical (RGBA channels included) before the file is saved
   and again every time the closet is opened.
-- The garment templates are fitted to the bounding box of the editable mask area. Pixels inside
-  the box but outside the mask stay untouched.
+- The garment templates are fitted to the silhouette inside the editable mask area (the mask is
+  the silhouette, so an opaque mascot works here). Pixels inside the box but outside the mask stay
+  untouched. See "Fit" in [wardrobe.md](wardrobe.md).
 
 ## Layout and versioning
 
@@ -25,11 +26,14 @@ closet/
   mascot/source.png    the immutable mascot (verbatim copy)
   mask/edit-mask.png   the explicit edit mask (verbatim copy)
   items/<id>.png       saved item portraits (same size as the mascot)
+  items-t3/<id>.png    item portraits after `closet migrate` (see below); `items_dir` names the live one
+  backups/             closet-templates-2-<n>.json, written by `closet migrate`
   catalog/<name>.png   contact sheet; catalog/<name>.json lists its tiles
 ```
 
-`closet.json` pins the mascot and mask hashes, the renderer `cache_config`, and per item its
-template, palette, `version` and file hash. Every command re-hashes mascot, mask and all items
+`closet.json` pins the mascot and mask hashes, the renderer `cache_config` (`templates: 3`), the
+`items_dir`, and per item its template, `style`, `palette`, the provenance of each
+(`style_choice`, `palette_choice`), `version` and file hash. Every command re-hashes mascot, mask and all items
 and fails with `changed ... sha256 mismatch` (exit code 2) if anything differs, so a swapped base
 asset or hand-edited item cannot contaminate existing wardrobes. An unknown `schema_version` is
 refused. The mascot of an existing closet cannot be replaced: start a new closet instead.
@@ -37,10 +41,32 @@ refused. The mascot of an existing closet cannot be replaced: start a new closet
 ## Inventory
 
 ```
-mascot-wardrobe closet --root DIR add coat --template very_cold --palette "#2878b5" "#e8b84b"
+mascot-wardrobe closet --root DIR add coat --template very_cold --style classic \
+    --palette "#2878b5" "#e8b84b"
+mascot-wardrobe closet --root DIR add hoodie --template cold --style streetwear --palette auto
 mascot-wardrobe closet --root DIR edit coat --palette "#aa2222"   # version 1 -> 2
 mascot-wardrobe closet --root DIR remove coat
 ```
+
+### Style, palette and prompts
+
+Each item stores a `style` (`classic` or `streetwear`), a `palette` of one to six `#RRGGBB`
+colours (roles: base first, accent last, secondary and highlight in between; see
+[wardrobe.md](wardrobe.md)) and the provenance of each: `user`, `auto`, `default`, or `migrated`.
+`--style auto` and `--palette auto` pick from a curated table deterministically, from the mascot
+hash and the item id (no network, no model). Palette 3 in the docs is only an example.
+
+- `add`: on a terminal, a missing `--style` or `--palette` is asked with a prompt. When input is
+  not a terminal, or with the global `--no-input`, both are required: a missing one exits with code
+  2 and writes nothing. (Library `Closet.add_item` without them uses `classic` and a curated
+  palette, provenance `default`.)
+- `edit`: an omitted `--style` or `--palette` keeps the stored value, even when `--template`
+  changes. When you change a garment attribute on a terminal, the prompts offer "keep current".
+  Label-only edits (`--name`, `--description`) never prompt.
+- Changing the style or palette bumps the `version` and re-renders. If `auto` lands on the values
+  already stored, only the provenance changes: `closet.json` is updated in place, the item file,
+  hash and `version` stay, wardrobes stay valid and the result says nothing was re-rendered. An
+  edit that changes nothing at all is refused with "Nothing to change".
 
 ### Names and descriptions
 
@@ -79,8 +105,7 @@ otherwise the argument parser reads it as an option.
   (`null`, wrong type, over-long, control characters) fails `open`, `list`, `catalog` and the other
   commands with `error: ...` and exit code 2.
 
-Templates are the six deterministic outfits (`very_cold` ... `very_hot`); the first palette
-color is the garment and the last is the accent. Item ids and wardrobe names are lowercase slugs
+Templates are the six deterministic outfits (`very_cold` ... `very_hot`). Item ids and wardrobe names are lowercase slugs
 (up to 40 characters). Removing an item that a wardrobe uses is refused and names the wardrobe.
 
 ## Named wardrobes
@@ -132,10 +157,37 @@ Two different fingerprints are involved, on purpose:
 - `sheet_sha256` is the exact fingerprint of the rendered sheet. It also changes when label text
   changes, even though `revision`, `version` and every item hash stay the same.
 
+## Upgrading an older closet
+
+A closet made by the previous renderer (`templates: 2`) cannot be opened by this version: the
+error points to `closet migrate`.
+
+```
+mascot-wardrobe closet --root DIR migrate --dry-run   # show the plan, write nothing
+mascot-wardrobe closet --root DIR migrate
+```
+
+- Preserved: item ids, names, descriptions, templates, palettes, versions, wardrobes, the mascot,
+  the mask and their hashes. Items become `classic` with provenance `migrated` for style and
+  palette, and are re-rendered with the new fit, so item hashes change. Each wardrobe is repinned
+  to the new hashes and its `revision` goes up by one.
+- The old `closet.json` is copied first to `backups/closet-templates-2-<n>.json` (never
+  overwriting an earlier backup). New items are written to `items-t3/`; the old `items/` and
+  `catalog/` are left untouched.
+- Atomic: `closet.json` is replaced once, after the new items are written and verified in memory.
+  If the final re-open check fails, the original `closet.json` is restored. An interrupted run
+  leaves the old `closet.json` live, and the next run overwrites leftovers in `items-t3/`.
+- Refused, with nothing changed: a tampered old item, a changed mascot or mask, an unknown renderer
+  configuration, or wardrobes that do not match their items. A closet that is already current
+  reports "already current"; running `migrate` twice is a no-op the second time.
+- Catalog sheets made before the migration are stale; rebuild them with `closet catalog`.
+- The same applies to `generate`: a `templates: 2` catalog is rejected; regenerate into a new
+  output directory.
+
 ## Not in this MVP
 
 - No automatic mask or body detection; you author the mask.
-- No import of externally generated garment art; items come from the six built-in templates.
+- No import of externally generated garment art and no external reference images; items come from the six built-in templates in the two built-in styles.
 - No per-category (weather) mapping of closet wardrobes, and no
   wiring into `select` / `publish` yet.
 - Item writes are atomic per file, but `closet.json` and an item file are not updated in one

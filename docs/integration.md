@@ -42,11 +42,12 @@ None of these contact a real account or need credentials. See [verification](ver
 
 ```sh
 mascot-wardrobe generate --mascot examples/mascot.png --id sunny --country BR \
-  --body-box 0.125 0.555 0.875 0.915
+  --body-box 0.125 0.555 0.875 0.915 --style classic --palette auto
 ```
 
 This writes `mascot-wardrobe-out/catalog/manifest.json` and the six outfits locally. Use your
-own mascot and body box for real use (see [wardrobe](wardrobe.md)).
+own mascot and body box for real use (see [wardrobe](wardrobe.md)). `--style` and `--palette` are required when not
+interactive.
 
 ## 4. Dry-run first
 

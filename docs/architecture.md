@@ -30,6 +30,9 @@ inversion.
 | `mascot_wardrobe.application` | Use cases: `prepare_wardrobe`, `select_outfit`, `export_outfit`, `sync_sandbox`, `publish_outfit` (dry-run unless applied) and the `safe_output` path guard. |
 | `mascot_wardrobe.wardrobe` | `WardrobeAgent` (generation, manifest, idempotent reuse, atlas and JPEG assets). |
 | `mascot_wardrobe.wardrobe.composer` | Pillow compositor: `LocalComposer`, `OutfitBrief`, the `Renderer` protocol, `CATEGORIES`, `_validate_brief`. |
+| `mascot_wardrobe.wardrobe.styles` | Style registry (`classic`, `streetwear`), the four palette roles and the deterministic `auto` resolvers. Standard library only. |
+| `mascot_wardrobe.wardrobe.fit` | `measure_fit` and `FitError`: measures the neck, shoulders, torso and hem from the silhouette (and the closet mask) so garments follow the image. |
+| `mascot_wardrobe.interfaces.prompts` | Interactive style and palette prompts with injected input and output; used only by the CLI on a terminal. |
 | `mascot_wardrobe.channels` | Supporting adapters: `FileExportChannel`, `SandboxBridge` (loopback HTTP server) and `WhatsAppBridgeChannel` (its client). |
 | `mascot_wardrobe.channels.live` (`channels/live.py`) | Opt-in live adapters: `HermesWhatsAppProfileAdapter`, `TelegramBotProfileAdapter`, `telegram_transport`, `publish_to_catalog`. Never used by the sandbox commands. |
 | `mascot_wardrobe.infrastructure` | Supporting adapters: `policies.load_profile` (JSON profiles) and `weather.fetch_weather` (Open-Meteo). |
@@ -54,7 +57,8 @@ the use case (`WardrobeAgent`), atlas and JPEG helpers, path safety (`_safe_root
 
 ## Data flow
 
-1. `generate`: `prepare_wardrobe` validates the output path with `safe_output`, loads the
+1. `generate`: the CLI resolves `--style`/`--palette` (prompting only on a terminal),
+   `prepare_wardrobe` validates the output path with `safe_output`, loads the
    profile, and `WardrobeAgent.generate` renders six outfits and writes assets plus
    `manifest.json`. A repeat with an identical request verifies and reuses existing assets.
 2. `select`: `select_outfit` reads and validates the manifest (size, country, six distinct
