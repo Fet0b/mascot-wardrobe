@@ -466,8 +466,12 @@ class Closet:
         width, height = source.size
         x0, y0, x1, y1 = self._data["mask"]["bbox"]
         # Half-pixel offsets keep int(v * n) on the mask bbox despite float rounding; the compositor
-        # measures the silhouette inside the mask, so the mask is its region.
-        box = ((x0 + 0.5) / width, (y0 + 0.5) / height, (x1 + 0.5) / width, (y1 + 0.5) / height)
+        # measures the silhouette inside the mask, so the mask is its region. A bbox reaching the
+        # image edge is clamped to 1.0, which int(v * n) maps back to the edge exactly.
+        box = tuple(
+            min(1.0, (v + 0.5) / n)
+            for v, n in zip((x0, y0, x1, y1), (width, height, width, height), strict=True)
+        )
         brief = OutfitBrief(template, palette, (), box, "closet item", style=style, region=mask)
         dressed = LocalComposer().render(source.copy(), brief)
         result = Image.composite(dressed, source, mask)  # mask 0 keeps every source byte

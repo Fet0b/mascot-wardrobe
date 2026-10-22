@@ -100,6 +100,21 @@ class IdentityTests(ClosetCase):
         )
         self.assertNotEqual(out.tobytes(), source.tobytes())
 
+    def test_a_mask_reaching_the_image_edges_still_renders(self):
+        from mascot_wardrobe.closet import Closet
+
+        mascot = ROOT / "examples" / "mascot.png"
+        width, height = Image.open(mascot).size
+        edge = self.base / "edge.png"
+        box = (width // 10, height * 55 // 100, width - 1, height - 1)  # touches right and bottom edges
+        write_mask(edge, box, (width, height))
+        closet = Closet.init(self.base / "edge-closet", mascot, edge)
+        self.assertEqual(closet._data["mask"]["bbox"], [box[0], box[1], width, height])
+        item = closet.add_item("coat", "cold", ("#2878b5",))
+        out = Image.open(closet.item_path("coat")).convert("RGBA")
+        self.assertNotEqual(out.tobytes(), Image.open(mascot).convert("RGBA").tobytes())
+        self.assertEqual(item["version"], 1)
+
     def test_unmasked_hole_inside_the_box_stays_untouched(self):
         closet_mask = self.base / "half.png"
         mask = Image.new("L", (160, 200), 0)
