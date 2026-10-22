@@ -958,7 +958,7 @@ class ClosetMigrateTests(ClosetCase):
         after = json.loads((self.root / "closet.json").read_text())
         self.assertEqual(after["mask"], before["mask"])
         self.assertEqual(after["mascot"], before["mascot"])
-        self.assertEqual(after["items_dir"], "items-t3")
+        self.assertEqual(after["items_dir"], "items-t4")
         self.assertEqual(after["active"], "mix")
         closet = Closet.open(self.root)
         for item_id, old in before["items"].items():
@@ -969,11 +969,11 @@ class ClosetMigrateTests(ClosetCase):
                 (new["style"], new["style_choice"], new["palette_choice"]),
                 ("classic", "migrated", "migrated"),
             )
-            self.assertEqual(new["file"], f"items-t3/{item_id}.png")
+            self.assertEqual(new["file"], f"items-t4/{item_id}.png")
             self.assertNotEqual(new["sha256"], old["sha256"])
             self.assertEqual(new["migrated_from"]["sha256"], old["sha256"])
             self.assertEqual(new["migrated_from"]["renderer"], {"renderer": "local-composer", "templates": 2})
-            self.assertEqual(closet.item_path(item_id), self.root / "items-t3" / f"{item_id}.png")
+            self.assertEqual(closet.item_path(item_id), self.root / "items-t4" / f"{item_id}.png")
         self.assertEqual(after["wardrobes"]["mix"]["revision"], 4)
         self.assertEqual(closet.use_wardrobe("mix")["name"], "mix")
         self.assertEqual(len(closet.build_catalog()["tiles"]), 2)
@@ -1009,7 +1009,7 @@ class ClosetMigrateTests(ClosetCase):
         self.assertEqual(report["stale_catalogs"], ["catalog/mix.png"])
         self.assertEqual((self.root / "closet.json").read_bytes(), self.original)
         self.assertFalse((self.root / "backups").exists())
-        self.assertFalse((self.root / "items-t3").exists())
+        self.assertFalse((self.root / "items-t4").exists())
 
     def test_render_failure_leaves_closet_json_byte_identical(self):
         from unittest import mock
@@ -1032,7 +1032,7 @@ class ClosetMigrateTests(ClosetCase):
 
         def verify(closet, **kwargs):
             real(closet, **kwargs)  # the legacy check passes; only the new in-memory state fails
-            if closet._data.get("items_dir") == "items-t3":
+            if closet._data.get("items_dir") == "items-t4":
                 raise ValueError("bad state")
 
         with (
@@ -1055,8 +1055,8 @@ class ClosetMigrateTests(ClosetCase):
         self.assertEqual((self.root / "closet.json").read_bytes(), self.original)
 
     def test_leftovers_of_a_failed_attempt_are_overwritten(self):
-        (self.root / "items-t3").mkdir()
-        (self.root / "items-t3" / "coat.png").write_bytes(b"leftover")
+        (self.root / "items-t4").mkdir()
+        (self.root / "items-t4" / "coat.png").write_bytes(b"leftover")
         self.migrate()
         from mascot_wardrobe.closet import Closet
 
@@ -1103,3 +1103,76 @@ class ClosetMigrateTests(ClosetCase):
 
         with self.assertRaisesRegex(ValueError, "closet --root .* migrate"):
             Closet.open(self.root)
+
+
+class RevisionThreeMigrateTests(ClosetMigrateTests):
+    """Run the existing atomicity/tamper suite against a previously migrated revision-3 closet."""
+
+    def setUp(self):
+        super().setUp()
+        data = json.loads(self.original)
+        data["renderer"] = {"renderer": "local-composer", "templates": 3, "styles": ["classic", "streetwear"]}
+        data["items_dir"] = "items-t3"
+        (self.root / "items").rename(self.root / "items-t3")
+        for item_id, record in data["items"].items():
+            record.update(style="streetwear", style_choice="user", palette_choice="auto")
+            record["file"] = f"items-t3/{item_id}.png"
+        self.write(data)
+        self.original = (self.root / "closet.json").read_bytes()
+
+    def test_preserves_identity_and_adds_styles_and_provenance(self):
+        from mascot_wardrobe.closet import Closet
+
+        before = json.loads(self.original)
+        old_files = {p: p.read_bytes() for p in (self.root / "items-t3").iterdir()}
+        self.assertTrue(self.migrate()["migrated"])
+        after = json.loads((self.root / "closet.json").read_text())
+        self.assertEqual(after["renderer"]["templates"], 4)
+        self.assertEqual(after["items_dir"], "items-t4")
+        for key in ("mask", "mascot", "active"):
+            self.assertEqual(before[key], after[key])
+        for item_id, old in before["items"].items():
+            new = after["items"][item_id]
+            for key in (
+                "style",
+                "style_choice",
+                "palette_choice",
+                "palette",
+                "name",
+                "description",
+                "version",
+            ):
+                self.assertEqual(old[key], new[key])
+            self.assertEqual(new["migrated_from"], {"renderer": before["renderer"], "sha256": old["sha256"]})
+        self.assertEqual(after["wardrobes"]["mix"]["revision"], 4)
+        self.assertEqual(old_files, {p: p.read_bytes() for p in old_files})
+        Closet.open(self.root).verify()
+
+    def test_backup_is_byte_equal_never_overwritten_and_old_files_untouched(self):
+        report = self.migrate()
+        backup = self.root / "backups" / "closet-templates-3-1.json"
+        self.assertEqual(report["backup"], str(backup))
+        self.assertEqual(backup.read_bytes(), self.original)
+        (self.root / "closet.json").write_bytes(self.original)
+        self.migrate()
+        self.assertEqual(backup.read_bytes(), self.original)
+        self.assertTrue((self.root / "backups" / "closet-templates-3-2.json").exists())
+
+    def test_refusals(self):
+        from mascot_wardrobe.closet import Closet
+
+        for relative in ("items-t3/coat.png", "mascot/source.png", "mask/edit-mask.png"):
+            path = self.root / relative
+            original = path.read_bytes()
+            path.write_bytes(b"tampered")
+            with self.assertRaises(ValueError):
+                self.migrate()
+            self.assertEqual((self.root / "closet.json").read_bytes(), self.original)
+            self.assertFalse((self.root / "backups").exists())
+            path.write_bytes(original)
+        data = json.loads(self.original)
+        data["wardrobes"]["mix"]["items"][0]["sha256"] = "0" * 64
+        self.write(data)
+        with self.assertRaises(ValueError):
+            Closet.migrate(self.root)
+        self.assertFalse((self.root / "backups").exists())

@@ -21,8 +21,9 @@ For a hash-pinned mascot, an explicit edit mask, item inventory and named wardro
 ## Body box alignment
 
 The mascot PNG keeps its original size. Clothing is painted only inside the normalized
-`body_box` `(x1, y1, x2, y2)`, default `(0.22, 0.60, 0.78, 0.88)` of the image. Pixels outside
-the box, including the head, are identical to the source. There is no face detection: you are
+`body_box` `(x1, y1, x2, y2)`, default `(0.22, 0.60, 0.78, 0.88)` of the image. Torso clothing stays inside
+the box. Streetwear may add the exact sneaker overlay inside independently detected foot interiors
+below the box; every other outside-box pixel is identical to the source. There is no face detection: you are
 responsible for choosing a box that covers the body and not the face. Adjust it with
 `--body-box` and check the six results.
 
@@ -35,13 +36,13 @@ default stays unchanged.
 
 `generate` takes two choices, `--style` and `--palette`.
 
-- Styles: `classic` (plain fitted garments) and `streetwear` (fitted geometric layers: panels,
-  stripes and prints). Styles are generic geometric details drawn by the local compositor; no
-  external reference images are sent or fetched, and nothing is copied from a brand or an
-  existing design. Each streetwear template has its own colour-block construction: contrast
-  sleeves and a highlight skirt (very_cold), side panels and a zip placket (cold), a deep lower
-  block and pocket (mild), a yoke and sleeves (ambient), a two-tone split (warm) and a light body
-  with a dark hem block (very_hot). The seams, stripes, rib hems and chest bars stay on every one.
+- Styles: `classic` (plain fitted garments) and `streetwear` (six distinct local geometric
+  garments). Streetwear uses a dominant base with small panels, piping and hardware: a hoodie
+  with neck warmer and kangaroo pocket (very_cold), a punk jacket with lapels, studs and a
+  safety pin (cold), a striped emo cardigan with one tartan panel (mild), an oversized tee
+  with diagonal sling bag (ambient), a tartan/studded punk vest (warm), and a sleeveless tank
+  with a small pouch (very_hot). Details follow the measured torso and share no generic chest
+  bars or shoulder/side seams. No logos, branded marks, model calls or network are used.
 - Palette: one to six `#RRGGBB` colours with four roles. `base` is the first colour, `accent` the
   last, `secondary` is the second colour when there are three or more (otherwise the base) and
   `highlight` is the second to last when there are four or more (otherwise the accent). A
@@ -75,15 +76,32 @@ The six templates are fitted to the silhouette that is actually in the image, no
 fractions of the box. `measure_fit` reads the alpha channel inside the body box (inside the closet
 edit mask, when there is one) and finds the neck row, the neck width, the shoulder row, the torso
 outline per row and the hem row. Garments are then built as layers (base, panels, details) that
-are clipped to that coverage, so no paint lands on a transparent pixel, outside the mask or above
+are clipped to that coverage, so torso paint never lands on a transparent pixel, outside the mask or above
 the neck row. The collar meets the head or chin line without painting over it, off-centre bodies
 are followed by the measured centre rather than the box centre, long sleeves (very cold, cold,
 mild) cover the arm nubs down to a cuff, the t-shirt covers the upper arm, and the sleeveless tee
 and the camisole leave the arms bare. A box whose top is below the head simply starts the garment
 at the first silhouette row.
 
-There is still no face or limb detection: you choose the box (or, in the closet, the mask), and
-the fit measures what is opaque inside it.
+There is no face detection: you choose the box (or, in the closet, the mask), and the torso fit
+measures what is opaque inside it. Use an explicit head-protecting mask when the box overlaps the
+head; the fit alone cannot guarantee that an overlapping head outline stays untouched.
+
+Streetwear separately inspects the complete source alpha silhouette for feet. A deterministic
+shape heuristic looks for exactly two stable terminal branches in the lower 28% of the silhouette,
+with comparable area, similar bottom heights, broad/short proportions and tapering tips. Isolated
+one-pixel alpha noise is filtered for topology only. Merged, extra, narrow, cropped or ambiguous
+branches produce no shoes. This is conservative geometry, not semantic recognition; unfamiliar
+poses can be missed. The detector uses no character-specific coordinates or colours and never
+uses an edit-mask edge to infer a foot.
+
+Sneakers use the palette base for uppers, secondary for soles and accent for toes/laces (black,
+purple and lavender with the approved palette). Paint is clipped to binary foot interiors,
+eroded by 1.5% of silhouette height to leave an outline margin, and to original fully opaque alpha
+and the explicit edit mask. Thus alpha and all protected pixels are byte-identical. Shoes can
+extend below the body box without changing that box or torso fit. The generation guard allows
+only the exact expected sneaker pixels outside the box, not arbitrary changes within foot masks.
+Classic keeps its existing pixels and does not add shoes.
 
 `FitError` (a `ValueError`) is raised, with the remedy in the message, when the silhouette
 cannot be measured: an empty or tiny silhouette in the box (fewer than a handful of opaque rows
@@ -92,15 +110,15 @@ measure), or inconsistent measurements. Move the body box over the body, use a t
 or use a closet edit mask: with an explicit mask the mask is the silhouette, so an opaque mascot
 works in the closet flow. The CLI reports `FitError` as an `error:` line with exit code 2.
 
-The renderer exposes `cache_config = {"renderer": "local-composer", "templates": 3, "styles":
+The renderer exposes `cache_config = {"renderer": "local-composer", "templates": 4, "styles":
 ["classic", "streetwear"]}`. It is stored in the manifest, so a catalog made by an older template
-revision (`templates: 2`) is rejected with a message to regenerate into a new output directory.
+revision (`templates: 2` or `templates: 3`) is rejected with a message to regenerate into a new output directory.
 Change `templates` whenever the pixels of any outfit change.
 
 The palette comes from your choice, or from the country profile when a library caller passes none.
 Garment names in a profile are descriptions for a possible future provider; the default compositor
-uses a fixed per-category template (padded coat, jacket, cardigan, t-shirt, sleeveless tee,
-camisole) and does not interpret the text.
+uses fixed per-category templates for each style and does not interpret the text. Classic
+remains padded coat, jacket, cardigan, t-shirt, sleeveless tee and camisole.
 
 Existing transparency is preserved. An opaque background is not removed, and a fully opaque body
 box fails with `FitError` unless a closet edit mask is used. See the limitations in the README.
@@ -135,3 +153,9 @@ is the exported contract:
 Each row has six usable frames; the last two columns are transparent. The motion is a
 geometric translation of the portrait (small shifts, a hop for `jumping`, a drop for `failed`),
 not an articulated animation. The manifest records the row order and geometry.
+
+The portable footwear regression suite uses synthetic silhouettes. To also exercise a supplied
+external transparent PNG, set `MASCOT_WARDROBE_FOOT_SOURCE=/path/to/mascot.png` when running
+`pytest tests/test_feet.py`. Without that variable only the external-source cases skip; the
+synthetic positive, negative, clipping and generation-guard checks still run. The external image
+is not bundled in the distribution.

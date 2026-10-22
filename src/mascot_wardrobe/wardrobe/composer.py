@@ -3,7 +3,8 @@
 The compositor owns fit. ``measure_fit`` reads the real silhouette (the source alpha, limited to
 the explicit edit mask when one is given), ``_coverage`` shapes the garment on it (neckline,
 shoulders, sides, sleeves or armholes, hem), ``_layers`` paints it, and ``compose_layers`` is the
-single clip point. Nothing is painted above ``Fit.neck_row`` or outside the body box.
+single torso clip point. Torso paint stays below ``Fit.neck_row`` inside the body box.
+Streetwear sneakers use a separate conservative source-alpha detector and strict interior masks.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Protocol
 
 from PIL import Image, ImageChops, ImageColor, ImageDraw
 
+from mascot_wardrobe.wardrobe.feet import shoe_overlay
 from mascot_wardrobe.wardrobe.fit import Fit, measure_fit
 from mascot_wardrobe.wardrobe.styles import STYLES, PaletteRoles, roles_from_colors, validate_style
 
@@ -104,6 +106,10 @@ _CUFF = (0.09, 0.09, 0.06, 0.07, 0.0, 0.0)  # cuff depth, of h
 
 
 LEGACY_RENDERER_CONFIG = {"renderer": "local-composer", "templates": 2}  # fixed-fraction templates
+PRIOR_RENDERER_CONFIGS = (
+    LEGACY_RENDERER_CONFIG,
+    {"renderer": "local-composer", "templates": 3, "styles": list(STYLES)},
+)
 
 
 def side_inset(style: str, w: int) -> int:
@@ -163,7 +169,7 @@ class LocalComposer:
     ``cache_config`` is part of the cache binding: bump ``templates`` whenever the pixels change.
     """
 
-    cache_config = {"renderer": "local-composer", "templates": 3, "styles": list(STYLES)}
+    cache_config = {"renderer": "local-composer", "templates": 4, "styles": list(STYLES)}
 
     def render(self, source: Image.Image, brief: OutfitBrief) -> Image.Image:
         _validate_brief(source, brief)
@@ -186,7 +192,10 @@ class LocalComposer:
         # off the transparent background and outside the edit mask.
         layer = Image.new("RGBA", source.size)
         layer.paste(compose_layers(coverage, layers, *clips), (x0, y0))
-        return Image.alpha_composite(source, layer)
+        result = Image.alpha_composite(source, layer)
+        if brief.style == "streetwear":
+            result = Image.alpha_composite(result, shoe_overlay(source.getchannel("A"), roles, brief.region))
+        return result
 
 
 @dataclass(frozen=True)
@@ -249,6 +258,16 @@ class _Canvas:
     def line(self, x0, y0, x1, y1, width, fill) -> None:
         s = _SUPERSAMPLE
         self.draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=fill, width=max(1, round(width * s)))
+
+    def polygon(self, points, fill) -> None:
+        self.draw.polygon([(x * _SUPERSAMPLE, y * _SUPERSAMPLE) for x, y in points], fill=fill)
+
+    def round_rect(self, x0, y0, x1, y1, radius, fill) -> None:
+        if x1 > x0 and y1 > y0:
+            s = _SUPERSAMPLE
+            self.draw.rounded_rectangle(
+                (x0 * s, y0 * s, x1 * s - 1, y1 * s - 1), radius=radius * s, fill=fill
+            )
 
     def result(self) -> Image.Image:
         return self.image.resize((self.w, self.h), Image.Resampling.BOX)
@@ -339,107 +358,141 @@ def _layers(index: int, style: str, fit: Fit, roles: PaletteRoles, w: int, h: in
     return [fabric, detail.result()]
 
 
-_STREET_COLLAR = (0.09, 0.075, 0.06, 0.03, 0.03, 0.03)  # hood ring or rib collar width, of w
-_STREET_CUFF = (0.07, 0.07, 0.07, 0.04, 0.0, 0.0)  # rib cuff depth, of h
-
-
 def _streetwear_layers(
     index: int, fit: Fit, roles: PaletteRoles, shape: _Shape, w: int, h: int
 ) -> list[Image.Image]:
-    """Generic geometric streetwear: each template has its own colour-block construction.
+    """Six compact, unbranded garments, drawn relative to the measured torso.
 
-    The fabric and the large blocks come first (they carry the palette roles), then the shared
-    line details (seams, rib hem and cuffs, hood ring, drawstrings), so lines stay on every
-    garment. No text, no logos, no third-party artwork.
+    The base remains dominant. Secondary panels and highlight piping describe each garment;
+    the accent role supplies sparse hardware. All shapes use the existing coverage/clip path.
     """
-    top, span = fit.neck_row, shape.span
     base, secondary, accent, highlight = roles.base, roles.secondary, roles.accent, roles.highlight
-    hooded = index <= 2  # very_cold, cold, mild
-    fabric = Image.new("RGBA", (w, h), (*(highlight if index == 5 else base), 255))
+    fabric = Image.new("RGBA", (w, h), (*base, 255))
     detail = _Canvas(w, h, "RGBA")
     torso_w = shape.right - shape.left
+    # Scale strokes with the available torso, but keep small hardware legible in tiny portraits.
+    stroke = max(1.5, min(torso_w * 0.006, shape.span * 0.012))
 
-    def row(v):
-        return top + v * span
+    def x(v):
+        return shape.left + v * torso_w
 
-    def arm_rows(y0, y1, color):  # the part of the sleeve outside the torso
-        for y in range(max(y0, 0), y1 + 1):
-            e, t = fit.extents[y], fit.torso[y]
-            if e is None:
-                continue
-            if t is None:
-                detail.rect(e[0], y, e[1] + 1, y + 1, color)
-            else:
-                detail.rect(e[0], y, t[0], y + 1, color)
-                detail.rect(t[1] + 1, y, e[1] + 1, y + 1, color)
+    def y(v):
+        return fit.neck_row + v * shape.span
 
-    def torso_block(v0, v1, color):  # full-width horizontal block
-        detail.rect(shape.left, row(v0), shape.right, row(v1), color)
+    def line(u0, v0, u1, v1, color=highlight, width=stroke):
+        detail.line(x(u0), y(v0), x(u1), y(v1), width, color)
 
-    def sleeve_stripes(color_a, color_b):
-        if shape.sleeve is None:
-            return
-        start, end = shape.sleeve
-        length = end - start + 1
-        for v, color in ((0.35, color_a), (0.5, color_b)):
-            y = start + round(v * length)
-            arm_rows(y, y + max(1, round(0.012 * h)) - 1, color)
+    def panel(points, color):
+        detail.polygon([(x(u), y(v)) for u, v in points], color)
 
-    # -- colour blocks: one construction per template --------------------------------------
-    if index == 0:  # padded parka: contrast sleeves, tall highlight skirt, quilted bands
-        if shape.sleeve is not None:
-            arm_rows(shape.sleeve[0], shape.sleeve[1], secondary)
-        torso_block(0.62, 0.92, highlight)
-        for v in (0.3, 0.46):
-            detail.line(shape.left, row(v), shape.right, row(v), 2, accent)
-        torso_block(0.30, 0.46, secondary)
-    elif index == 1:  # zip jacket: racing-stripe side panels from yoke to hem, contrast zip placket
-        side = 0.22 * torso_w
-        for x0, x1 in ((shape.left, shape.left + side), (shape.right - side, shape.right)):
-            detail.rect(x0, row(0.14), x1, row(0.92), secondary)
-        detail.rect(
-            shape.cx - 0.04 * torso_w, top + shape.dip, shape.cx + 0.04 * torso_w, row(0.92), highlight
+    def pocket(u0, v0, u1, v1, trim=highlight):
+        radius = min((u1 - u0) * torso_w, (v1 - v0) * shape.span) * 0.18
+        detail.round_rect(x(u0), y(v0), x(u1), y(v1), radius, trim)
+        detail.round_rect(
+            x(u0) + stroke,
+            y(v0) + stroke,
+            x(u1) - stroke,
+            y(v1) - stroke,
+            max(0, radius - stroke),
+            secondary,
         )
-        detail.line(shape.cx, top + shape.dip, shape.cx, row(0.56), 3, accent)
-        sleeve_stripes(accent, highlight)
-    elif index == 2:  # pullover hoodie: deep lower colour block, kangaroo pocket, striped sleeves
-        torso_block(0.5, 0.92, secondary)
-        x0, x1 = shape.cx - 0.2 * torso_w, shape.cx + 0.2 * torso_w
-        y0, y1 = row(0.56), row(0.8)
-        detail.rect(x0, y0, x1, y1, accent)
-        detail.rect(x0 + 2, y0 + 2, x1 - 2, y1 - 2, base)
-        sleeve_stripes(accent, highlight)
-    elif index == 3:  # tee: contrast yoke across the shoulders and contrast sleeves
-        torso_block(0, 0.36, secondary)
+
+    def stud(u, v):
+        detail.ellipse(x(u), y(v), stroke, stroke, accent)
+
+    def tartan(u0, v0, u1, v1):
+        # A single bounded swatch, with sparse crossing threads rather than a large colour block.
+        detail.rect(x(u0), y(v0), x(u1), y(v1), secondary)
+        for share in (0.25, 0.65):
+            u, v = u0 + share * (u1 - u0), v0 + share * (v1 - v0)
+            line(u, v0, u, v1, highlight)
+            line(u0, v, u1, v, highlight)
+        line(u0, v0 + 0.45 * (v1 - v0), u1, v0 + 0.45 * (v1 - v0), accent)
+
+    def collar(trim, color):
+        detail.ellipse(
+            shape.cx,
+            fit.neck_row,
+            shape.half + trim * torso_w,
+            shape.dip + trim * shape.span,
+            color,
+        )
+
+    def lapels(depth, reach):
+        for mirrored in (False, True):
+            points = [(0.22, 0.09), (0.46, 0.18), (0.36, depth), (reach, 0.26)]
+            panel([(1 - u if mirrored else u, v) for u, v in points], secondary)
+            direction = -1 if mirrored else 1
+            start = 1 if mirrored else 0
+            line(start + direction * 0.22, 0.09, start + direction * 0.36, depth)
+
+    if index == 0:  # hoodie, low neck warmer and angular kangaroo pocket
+        collar(0.035, secondary)
+        detail.round_rect(x(0.29), y(0.10), x(0.71), y(0.36), 0.035 * torso_w, secondary)
+        line(0.33, 0.345, 0.67, 0.345)
+        for u, end in ((0.43, 0.40), (0.57, 0.60)):
+            line(u, 0.36, end, 0.48, accent)
+        outline = [(0.31, 0.54), (0.69, 0.54), (0.77, 0.65), (0.74, 0.83), (0.26, 0.83), (0.23, 0.65)]
+        panel(outline, highlight)
+        panel([(0.32, 0.56), (0.68, 0.56), (0.75, 0.66), (0.72, 0.81), (0.28, 0.81), (0.25, 0.66)], secondary)
+        line(0.31, 0.58, 0.27, 0.70, base, 2 * stroke)
+        line(0.69, 0.58, 0.73, 0.70, base, 2 * stroke)
+    elif index == 1:  # punk jacket: folded lapels, off-centre zip, three studs and a safety pin
+        lapels(0.43, 0.16)
+        line(0.52, 0.29, 0.46, 0.94)
+        stud(0.50, 0.52)
+        for u, v in ((0.26, 0.18), (0.31, 0.22), (0.74, 0.18)):
+            stud(u, v)
+        pocket(0.18, 0.67, 0.35, 0.79, secondary)
+        line(0.20, 0.69, 0.32, 0.69)
+        # Closed, angled pin with a clasp, clear of the zip and lapels.
+        for a, b in [
+            ((0.73, 0.49), (0.78, 0.57)),
+            ((0.78, 0.57), (0.75, 0.63)),
+            ((0.75, 0.63), (0.70, 0.55)),
+            ((0.70, 0.55), (0.73, 0.49)),
+        ]:
+            line(*a, *b, accent)
+        stud(0.73, 0.49)
+    elif index == 2:  # emo cardigan: V opening, tiny buttons, sleeve stripes, one tartan patch
+        line(0.30, 0.05, 0.50, 0.34, secondary, 3 * stroke)
+        line(0.70, 0.05, 0.50, 0.34, secondary, 3 * stroke)
+        line(0.50, 0.34, 0.50, 0.93, secondary, 3 * stroke)
+        for v in (0.40, 0.57, 0.74):
+            stud(0.50, v)
+        # Continue the restrained stripe motif onto the shoulder when a compact box excludes arms.
+        for v in (0.30, 0.39, 0.48):
+            line(0.04, v, 0.14, v)
         if shape.sleeve is not None:
-            arm_rows(shape.sleeve[0], shape.sleeve[1], secondary)
-        torso_block(0.7, 0.92, highlight)
-    elif index == 4:  # tank: two-tone split at mid-height with a highlight stripe
-        torso_block(0.5, 0.92, secondary)
-        torso_block(0.44, 0.5, highlight)
-    else:  # camisole: light body, dark hem block, secondary mid band
-        torso_block(0.55, 0.92, base)
-        torso_block(0.38, 0.46, secondary)
-    # -- shared line details ----------------------------------------------------------------
-    detail.line(shape.left, row(0.14), shape.right, row(0.14), 2, accent)  # shoulder yoke seam
-    for x in (shape.left + 0.18 * torso_w, shape.right - 0.18 * torso_w):  # side seams
-        detail.line(x, row(0.14), x, row(0.92), 2, accent)
-    # generic chest print: three bars of different length (clear of the yoke block on the tee)
-    bar = max(2, round(0.012 * h))
-    first_bar = 0.4 if index == 3 else 0.27
-    for k, share in enumerate((0.34, 0.24, 0.3)):
-        y = row(first_bar) + k * 2.2 * bar
-        half = share * torso_w / 2
-        detail.rect(shape.cx - half, y, shape.cx + half, y + bar, accent if index == 5 else highlight)
-    # rib hem and cuffs
-    detail.rect(shape.left, row(0.92), shape.right, fit.hem_row + 1, accent)
-    if shape.sleeve is not None:
-        end = shape.sleeve[1]
-        arm_rows(end - max(1, round(_STREET_CUFF[index] * h)) + 1, end, accent)
-    # hood ring (secondary) or rib collar (accent); the coverage keeps both below the neck row
-    t = _STREET_COLLAR[index] * w
-    detail.ellipse(shape.cx, top, shape.half + t, shape.dip + t, secondary if hooded else accent)
-    if hooded:  # drawstrings
-        for x in (shape.cx - 0.05 * torso_w, shape.cx + 0.05 * torso_w):
-            detail.line(x, top + shape.dip, x, top + shape.dip + 0.1 * span, 2, highlight)
+            start, end = shape.sleeve
+            for share in (0.40, 0.60, 0.80):
+                row = start + round(share * (end - start))
+                # Stripes end at the measured torso; they never become chest bars.
+                for row_y in range(row, min(end + 1, row + max(1, round(stroke)))):
+                    e, t = fit.extents[row_y], fit.torso[row_y]
+                    if e is not None and t is not None:
+                        detail.rect(e[0], row_y, t[0], row_y + 1, highlight)
+                        detail.rect(t[1] + 1, row_y, e[1] + 1, row_y + 1, highlight)
+        tartan(0.20, 0.66, 0.37, 0.84)
+    elif index == 3:  # oversized tee with one diagonal strap and a compact sling bag
+        collar(0.012, highlight)
+        line(0.24, 0.18, 0.77, 0.70, secondary, 5 * stroke)
+        line(0.25, 0.18, 0.78, 0.70, highlight)
+        pocket(0.63, 0.58, 0.87, 0.85, secondary)
+        line(0.66, 0.64, 0.84, 0.64)
+        stud(0.81, 0.65)
+    elif index == 4:  # punk vest: short lapels, studs and one small tartan pocket
+        lapels(0.34, 0.22)
+        line(0.50, 0.36, 0.50, 0.93, secondary, 2 * stroke)
+        tartan(0.27, 0.59, 0.43, 0.79)
+        for u, v in ((0.64, 0.46), (0.70, 0.46), (0.76, 0.46)):
+            stud(u, v)
+        line(0.67, 0.61, 0.73, 0.68)
+        line(0.73, 0.68, 0.68, 0.77)
+    else:  # sleeveless scoop tank with a short pouch strap, binding and a small belt pouch
+        collar(0.012, secondary)
+        line(0.69, 0.43, 0.72, 0.69, secondary, 3 * stroke)
+        line(0.70, 0.43, 0.73, 0.69)
+        pocket(0.59, 0.67, 0.79, 0.88)
+        line(0.62, 0.72, 0.76, 0.72, accent)
     return [fabric, detail.result()]

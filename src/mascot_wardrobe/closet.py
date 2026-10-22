@@ -20,11 +20,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from mascot_wardrobe.wardrobe import (
     CATEGORIES,
-    LEGACY_RENDERER_CONFIG,
     LocalComposer,
     OutfitBrief,
     _safe_root,
 )
+from mascot_wardrobe.wardrobe.composer import PRIOR_RENDERER_CONFIGS
 from mascot_wardrobe.wardrobe.styles import (
     AUTO_PALETTES,
     resolve_palette,
@@ -294,10 +294,10 @@ class Closet:
 
     @classmethod
     def migrate(cls, root, *, dry_run=False) -> dict:
-        """Upgrade a template-set-2 closet to the current renderer; ``closet.json`` is the commit point.
+        """Upgrade a template-set-2 or -3 closet to the current renderer; ``closet.json`` is the commit point.
 
-        Items are re-rendered as ``classic`` into ``items-t3/`` with the stored template and palette;
-        the old ``items/`` and ``catalog/`` are never touched, and the original ``closet.json`` is
+        Revision 2 items become ``classic``; revision 3 keeps style and choice provenance. New
+        portraits go to ``items-t4/``; old items and catalogs are untouched. The original JSON is
         kept under ``backups/``. Nothing is written when the plan is refused or ``dry_run`` is set.
         """
         root = _safe_root(Path(root))
@@ -311,10 +311,12 @@ class Closet:
         current = json.loads(json.dumps(LocalComposer.cache_config))
         if data.get("renderer") == current:
             return {"migrated": False, "reason": "already current"}
-        if data.get("renderer") != LEGACY_RENDERER_CONFIG:
+        prior = data.get("renderer")
+        if prior not in PRIOR_RENDERER_CONFIGS:
             raise ValueError("Cannot migrate: the closet renderer configuration is not a known legacy one.")
-        if data.get("items_dir", DEFAULT_ITEMS_DIR) != DEFAULT_ITEMS_DIR:
-            raise ValueError("Cannot migrate: a legacy closet must use the 'items' directory.")
+        supported_dirs = (DEFAULT_ITEMS_DIR,) if prior["templates"] == 2 else (DEFAULT_ITEMS_DIR, "items-t3")
+        if data.get("items_dir", DEFAULT_ITEMS_DIR) not in supported_dirs:
+            raise ValueError("Cannot migrate: the prior renderer has an unexpected items directory.")
         legacy = cls(root, data)
         legacy.verify(renderer_check=False)
         wardrobes = data.get("wardrobes")
@@ -342,9 +344,9 @@ class Closet:
             raise ValueError(f"{new_dir} cannot be a symbolic link.")
         backups = root / "backups"
         number = 1
-        while (backups / f"closet-templates-2-{number}.json").exists():
+        while (backups / f"closet-templates-{prior['templates']}-{number}.json").exists():
             number += 1
-        backup = backups / f"closet-templates-2-{number}.json"
+        backup = backups / f"closet-templates-{prior['templates']}-{number}.json"
         _write_atomic(backup, original)
         if _sha256_bytes(_read_file(backup, "The backup")) != _sha256_bytes(original):
             raise ValueError("The backup does not match closet.json; migration stopped.")
@@ -356,21 +358,22 @@ class Closet:
         hashes = {}
         for item_id, record in data["items"].items():
             meta = _with_metadata(item_id, record)
-            rendered = legacy._render(source, mask, meta["template"], tuple(meta["palette"]), DEFAULT_STYLE)
+            style = DEFAULT_STYLE if prior["templates"] == 2 else meta["style"]
+            rendered = legacy._render(source, mask, meta["template"], tuple(meta["palette"]), style)
             _write_atomic(root / new_dir / f"{_name(item_id, 'item id')}.png", rendered)
             hashes[item_id] = _sha256_bytes(rendered)
             new["items"][item_id] = {
                 "name": meta["name"],
                 "description": meta["description"],
                 "template": meta["template"],
-                "style": DEFAULT_STYLE,
-                "style_choice": "migrated",
+                "style": style,
+                "style_choice": "migrated" if prior["templates"] == 2 else meta["style_choice"],
                 "palette": list(meta["palette"]),
-                "palette_choice": "migrated",
+                "palette_choice": "migrated" if prior["templates"] == 2 else meta["palette_choice"],
                 "version": meta["version"],
                 "file": f"{new_dir}/{item_id}.png",
                 "sha256": hashes[item_id],
-                "migrated_from": {"renderer": LEGACY_RENDERER_CONFIG, "sha256": record["sha256"]},
+                "migrated_from": {"renderer": prior, "sha256": record["sha256"]},
             }
         for wardrobe in new["wardrobes"].values():
             wardrobe["revision"] += 1
@@ -437,9 +440,10 @@ class Closet:
         if _sha256_bytes(mask) != self._data["mask"]["sha256"]:
             raise ValueError("The edit mask changed: sha256 mismatch with the closet record.")
         if renderer_check and self._data["renderer"] != json.loads(json.dumps(LocalComposer.cache_config)):
-            if self._data["renderer"] == LEGACY_RENDERER_CONFIG:
+            if self._data["renderer"] in PRIOR_RENDERER_CONFIGS:
                 raise ValueError(
-                    "This closet was made by template set 2; upgrade it with: "
+                    f"This closet was made by template set {self._data['renderer']['templates']}; "
+                    "upgrade it with: "
                     f"mascot-wardrobe closet --root {self.root} migrate"
                 )
             raise ValueError("The renderer configuration changed; items were made by another template set.")
