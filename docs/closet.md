@@ -68,6 +68,34 @@ hash and the item id (no network, no model). Palette 3 in the docs is only an ex
   hash and `version` stay, wardrobes stay valid and the result says nothing was re-rendered. An
   edit that changes nothing at all is refused with "Nothing to change".
 
+### One piece at a time
+
+```
+mascot-wardrobe closet --root DIR piece --country BR [--wardrobe today]
+```
+
+An interactive loop for terminals (scripts use `add`). For every piece it asks, in order:
+
+1. the intended use temperature in Celsius, mapped to one of the six categories through the same
+   country-profile thresholds as `select` (`CountryProfile.classify`; a boundary belongs to the
+   warmer category, and values outside -90 to 65 are rejected);
+2. the style, and 3. the palette, each either supplied by you or delegated to the deterministic
+   local `auto`. Nothing is inherited from the previous piece;
+4. an item id (blank takes `<category>-<n>`).
+
+Only that item is rendered and saved. The prompts and the JSON result show the preview path,
+version, sha256, temperature and category, style and palette with their provenance (`user` or
+`auto`), and that no remote inference was used. The intended temperature is kept in the item
+description. You may then revise the piece (blank temperature or "keep current" keeps a value): the
+revision goes through `edit`, so it bumps only that item's version and leaves every other item, its
+file and its hash untouched. Finally it asks whether to create another piece; yes starts a fresh
+cycle. With `--wardrobe NAME` the session's pieces are saved as that wardrobe and its catalog is
+built when you finish; without it nothing is added to a wardrobe.
+
+Publishing to Bot Mode, Telegram or WhatsApp stays a separate step after you approve the final
+image: see `publish` in [integration.md](integration.md), which needs its own explicit `--apply`
+and a configured channel for each destination. `piece` never contacts a channel.
+
 ### Names and descriptions
 
 The `id` is the stable slug used by wardrobes and file names and never changes. Each item also has an

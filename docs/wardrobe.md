@@ -38,7 +38,10 @@ default stays unchanged.
 - Styles: `classic` (plain fitted garments) and `streetwear` (fitted geometric layers: panels,
   stripes and prints). Styles are generic geometric details drawn by the local compositor; no
   external reference images are sent or fetched, and nothing is copied from a brand or an
-  existing design.
+  existing design. Each streetwear template has its own colour-block construction: contrast
+  sleeves and a highlight skirt (very_cold), side panels and a zip placket (cold), a deep lower
+  block and pocket (mild), a yoke and sleeves (ambient), a two-tone split (warm) and a light body
+  with a dark hem block (very_hot). The seams, stripes, rib hems and chest bars stay on every one.
 - Palette: one to six `#RRGGBB` colours with four roles. `base` is the first colour, `accent` the
   last, `secondary` is the second colour when there are three or more (otherwise the base) and
   `highlight` is the second to last when there are four or more (otherwise the accent). A

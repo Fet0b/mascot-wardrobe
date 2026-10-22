@@ -938,6 +938,88 @@ class StreetwearTests(unittest.TestCase):
         self.assertIsNone(composer.armhole("streetwear", 0))
 
 
+class StreetwearDistinctionTests(unittest.TestCase):
+    """Each template has its own colour-block construction, not one shared layer stack."""
+
+    ROLES = {"base": 0, "secondary": 1, "highlight": 2, "accent": 3}  # indexes into PALETTE_3
+
+    def render(self, source, category, box=DEFAULT_BOX, region=None):
+        from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
+
+        brief = OutfitBrief(category, PALETTE_3, (), box, "style", style="streetwear", region=region)
+        return LocalComposer().render(source, brief)
+
+    def shares(self, source, result):
+        area = garment_mask(source, result).histogram()[255]
+        counts = colour_counts(result, source, PALETTE_3)
+        return {role: counts[i] / area for role, i in self.ROLES.items()}
+
+    def test_every_template_fills_large_areas_with_several_palette_roles(self):
+        for name, source, box, region, _head in fit_cases():
+            for category in CATEGORY_NAMES:
+                with self.subTest(case=name, category=category):
+                    shares = self.shares(source, self.render(source.copy(), category, box, region))
+                    blocks = [role for role in ("base", "secondary", "highlight") if shares[role] >= 0.06]
+                    self.assertGreaterEqual(len(blocks), 2, shares)
+
+    def test_templates_are_not_near_duplicates(self):
+        for name, source, box, region, _head in fit_cases():
+            renders = {c: self.render(source.copy(), c, box, region) for c in CATEGORY_NAMES}
+            for i, first in enumerate(CATEGORY_NAMES):
+                for second in CATEGORY_NAMES[i + 1 :]:
+                    with self.subTest(case=name, pair=(first, second)):
+                        a, b = renders[first], renders[second]
+                        both = ImageChops.multiply(garment_mask(source, a), garment_mask(source, b))
+                        shared = both.histogram()[255]
+                        differs = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+                        differs = ImageChops.multiply(
+                            differs.convert("L").point(lambda v: 255 if v else 0), both
+                        )
+                        self.assertGreater(differs.histogram()[255] / shared, 0.2)
+
+    def test_templates_do_not_share_one_colour_distribution(self):
+        source = source_image()
+        profiles = {
+            tuple(round(v, 1) for v in self.shares(source, self.render(source.copy(), c)).values())
+            for c in CATEGORY_NAMES
+        }
+        self.assertEqual(len(profiles), 6)
+
+    def test_lines_stay_and_protected_pixels_are_untouched(self):
+        for name, source, box, region, _head in fit_cases():
+            px = pixel_box(box, source.size)
+            for category in CATEGORY_NAMES:
+                with self.subTest(case=name, category=category):
+                    result = self.render(source.copy(), category, box, region)
+                    accent = colour_counts(result, source, [PALETTE_3[3]])[0]
+                    self.assertGreater(accent, 0)  # seams, zips and rib lines remain
+                    transparent = source.getchannel("A").point(lambda v: 255 if v == 0 else 0)
+                    self.assertIsNone(
+                        ImageChops.multiply(garment_mask(source, result), transparent).getbbox()
+                    )
+                    outside = Image.new("L", source.size, 255)
+                    outside.paste(0, px)
+                    self.assertIsNone(ImageChops.multiply(garment_mask(source, result), outside).getbbox())
+                    if region is not None:
+                        unmasked = region.point(lambda v: 255 if v == 0 else 0)
+                        self.assertIsNone(
+                            ImageChops.multiply(garment_mask(source, result), unmasked).getbbox()
+                        )
+
+    def test_fit_does_not_depend_on_the_colour_layout(self):
+        """Coverage (silhouette fit) is the same for any palette; only the paint inside it changes."""
+        source = source_image()
+        for category in CATEGORY_NAMES:
+            a = garment_mask(source, self.render(source.copy(), category))
+            from mascot_wardrobe.wardrobe import LocalComposer, OutfitBrief
+
+            other = LocalComposer().render(
+                source.copy(),
+                OutfitBrief(category, ("#ffffff", "#000000"), (), DEFAULT_BOX, "s", style="streetwear"),
+            )
+            self.assertEqual(a.tobytes(), garment_mask(source, other).tobytes(), category)
+
+
 class ChoiceTests(unittest.TestCase):
     """``WardrobeAgent.generate`` with a resolved ``StyleChoice``."""
 

@@ -346,11 +346,16 @@ _STREET_CUFF = (0.07, 0.07, 0.07, 0.04, 0.0, 0.0)  # rib cuff depth, of h
 def _streetwear_layers(
     index: int, fit: Fit, roles: PaletteRoles, shape: _Shape, w: int, h: int
 ) -> list[Image.Image]:
-    """Generic geometric streetwear details: no text, no logos, no third-party artwork."""
+    """Generic geometric streetwear: each template has its own colour-block construction.
+
+    The fabric and the large blocks come first (they carry the palette roles), then the shared
+    line details (seams, rib hem and cuffs, hood ring, drawstrings), so lines stay on every
+    garment. No text, no logos, no third-party artwork.
+    """
     top, span = fit.neck_row, shape.span
     base, secondary, accent, highlight = roles.base, roles.secondary, roles.accent, roles.highlight
     hooded = index <= 2  # very_cold, cold, mild
-    fabric = Image.new("RGBA", (w, h), (*base, 255))
+    fabric = Image.new("RGBA", (w, h), (*(highlight if index == 5 else base), 255))
     detail = _Canvas(w, h, "RGBA")
     torso_w = shape.right - shape.left
 
@@ -368,33 +373,64 @@ def _streetwear_layers(
                 detail.rect(e[0], y, t[0], y + 1, color)
                 detail.rect(t[1] + 1, y, e[1] + 1, y + 1, color)
 
-    # colour-block panel: the lower third of the body
-    detail.rect(shape.left, row(0.62), shape.right, row(0.92), secondary)
-    # seams: shoulder yoke and the two side seams
-    detail.line(shape.left, row(0.14), shape.right, row(0.14), 2, accent)
-    for x in (shape.left + 0.18 * torso_w, shape.right - 0.18 * torso_w):
-        detail.line(x, row(0.14), x, row(0.92), 2, accent)
-    if index == 0:  # padded: a quilting line
-        detail.line(shape.left, row(0.46), shape.right, row(0.46), 2, accent)
-    elif index == 1:  # zipped: a centre zip line
+    def torso_block(v0, v1, color):  # full-width horizontal block
+        detail.rect(shape.left, row(v0), shape.right, row(v1), color)
+
+    def sleeve_stripes(color_a, color_b):
+        if shape.sleeve is None:
+            return
+        start, end = shape.sleeve
+        length = end - start + 1
+        for v, color in ((0.35, color_a), (0.5, color_b)):
+            y = start + round(v * length)
+            arm_rows(y, y + max(1, round(0.012 * h)) - 1, color)
+
+    # -- colour blocks: one construction per template --------------------------------------
+    if index == 0:  # padded parka: contrast sleeves, tall highlight skirt, quilted bands
+        if shape.sleeve is not None:
+            arm_rows(shape.sleeve[0], shape.sleeve[1], secondary)
+        torso_block(0.62, 0.92, highlight)
+        for v in (0.3, 0.46):
+            detail.line(shape.left, row(v), shape.right, row(v), 2, accent)
+        torso_block(0.30, 0.46, secondary)
+    elif index == 1:  # zip jacket: racing-stripe side panels from yoke to hem, contrast zip placket
+        side = 0.22 * torso_w
+        for x0, x1 in ((shape.left, shape.left + side), (shape.right - side, shape.right)):
+            detail.rect(x0, row(0.14), x1, row(0.92), secondary)
+        detail.rect(
+            shape.cx - 0.04 * torso_w, top + shape.dip, shape.cx + 0.04 * torso_w, row(0.92), highlight
+        )
         detail.line(shape.cx, top + shape.dip, shape.cx, row(0.56), 3, accent)
-    if hooded:  # kangaroo pocket over the panel
+        sleeve_stripes(accent, highlight)
+    elif index == 2:  # pullover hoodie: deep lower colour block, kangaroo pocket, striped sleeves
+        torso_block(0.5, 0.92, secondary)
         x0, x1 = shape.cx - 0.2 * torso_w, shape.cx + 0.2 * torso_w
         y0, y1 = row(0.56), row(0.8)
         detail.rect(x0, y0, x1, y1, accent)
         detail.rect(x0 + 2, y0 + 2, x1 - 2, y1 - 2, base)
-    if shape.sleeve is not None and index <= 2:  # long sleeves: two stripes
-        start, end = shape.sleeve
-        length = end - start + 1
-        for v, color in ((0.35, accent), (0.5, highlight)):
-            y = start + round(v * length)
-            arm_rows(y, y + max(1, round(0.012 * h)) - 1, color)
-    # generic chest print: three bars of different length
+        sleeve_stripes(accent, highlight)
+    elif index == 3:  # tee: contrast yoke across the shoulders and contrast sleeves
+        torso_block(0, 0.36, secondary)
+        if shape.sleeve is not None:
+            arm_rows(shape.sleeve[0], shape.sleeve[1], secondary)
+        torso_block(0.7, 0.92, highlight)
+    elif index == 4:  # tank: two-tone split at mid-height with a highlight stripe
+        torso_block(0.5, 0.92, secondary)
+        torso_block(0.44, 0.5, highlight)
+    else:  # camisole: light body, dark hem block, secondary mid band
+        torso_block(0.55, 0.92, base)
+        torso_block(0.38, 0.46, secondary)
+    # -- shared line details ----------------------------------------------------------------
+    detail.line(shape.left, row(0.14), shape.right, row(0.14), 2, accent)  # shoulder yoke seam
+    for x in (shape.left + 0.18 * torso_w, shape.right - 0.18 * torso_w):  # side seams
+        detail.line(x, row(0.14), x, row(0.92), 2, accent)
+    # generic chest print: three bars of different length (clear of the yoke block on the tee)
     bar = max(2, round(0.012 * h))
+    first_bar = 0.4 if index == 3 else 0.27
     for k, share in enumerate((0.34, 0.24, 0.3)):
-        y = row(0.27) + k * 2.2 * bar
+        y = row(first_bar) + k * 2.2 * bar
         half = share * torso_w / 2
-        detail.rect(shape.cx - half, y, shape.cx + half, y + bar, highlight)
+        detail.rect(shape.cx - half, y, shape.cx + half, y + bar, accent if index == 5 else highlight)
     # rib hem and cuffs
     detail.rect(shape.left, row(0.92), shape.right, fit.hem_row + 1, accent)
     if shape.sleeve is not None:

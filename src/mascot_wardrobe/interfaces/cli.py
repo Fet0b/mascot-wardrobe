@@ -235,6 +235,22 @@ def _closet_parser(commands):
         help="Upgrade a template-set-2 closet to the current renderer (keeps a backup; atomic)",
     )
     migrate.add_argument("--dry-run", action="store_true", help="Show the plan; write nothing")
+    piece = actions.add_parser(
+        "piece",
+        help="Interactive: create one piece at a time (temperature, style, palette), revise it, repeat",
+        description=(
+            "Ask the intended use temperature in Celsius (mapped through the country profile "
+            "thresholds), then the style and the palette, separately for every piece. Only that piece "
+            "is rendered and saved; you can revise it, and then choose to create another. Needs a "
+            "terminal; scripts use 'closet add'. Local rendering only."
+        ),
+    )
+    piece.add_argument("--country", required=True, help="Explicit country preset for the thresholds")
+    piece.add_argument("--profiles", "--profile", dest="profiles", type=Path)
+    piece.add_argument(
+        "--wardrobe",
+        help="At the end, save this session's pieces as this wardrobe and build its catalog",
+    )
     actions.add_parser("list", help="Show items, wardrobes and the active wardrobe")
     actions.add_parser("verify", help="Check mascot, mask and items against their recorded sha256")
 
@@ -251,6 +267,18 @@ def _closet(args, interactive=False, read=input):
         }
     if args.action == "migrate":
         return Closet.migrate(args.root, dry_run=args.dry_run)
+    if args.action == "piece":
+        if not interactive:
+            raise ValueError(
+                "closet piece is interactive and needs a terminal; for scripts use "
+                "'closet add' with --template, --style and --palette"
+            )
+        from mascot_wardrobe.infrastructure.policies import load_profile
+        from mascot_wardrobe.interfaces.piece import run_piece_session
+
+        profile = load_profile(args.country, args.profiles)
+        ask, write = _prompt_io(read)
+        return run_piece_session(Closet.open(args.root), profile, ask, write, wardrobe=args.wardrobe)
     style = palette = None
     if args.action in ("add", "edit"):
         style, palette = _choices(args, interactive, read, keep=args.action == "edit")

@@ -8,6 +8,7 @@ deterministic local function.
 
 from __future__ import annotations
 
+from mascot_wardrobe.domain.models import validate_temperature
 from mascot_wardrobe.wardrobe.styles import AUTO, STYLES, validate_palette, validate_style
 
 KEEP = object()  # sentinel: keep the stored value (edits only)
@@ -73,3 +74,34 @@ def ask_palette(read, write, *, allow_keep):
         lambda text: list(validate_palette(text.split())),
         allow_keep,
     )
+
+
+def ask_temperature(read, write, *, allow_keep=False):
+    """Return the intended use temperature in Celsius, or ``KEEP`` on a blank answer (edits only)."""
+    write(
+        "Intended use temperature in Celsius (for example 12 or -3.5)"
+        + (", blank keeps it:" if allow_keep else ":")
+    )
+    for _ in range(ATTEMPTS):
+        text = _read(read, "temperature> ").strip()
+        if allow_keep and not text:
+            return KEEP
+        try:
+            return validate_temperature(float(text))
+        except ValueError as error:
+            write(f"  Enter a number of degrees Celsius ({error}).")
+    raise ValueError(f"No valid temperature after {ATTEMPTS} attempts.")
+
+
+def ask_yes_no(read, write, question, *, default=False):
+    """Ask a yes/no question; a blank answer is ``default``, end of input never is."""
+    for _ in range(ATTEMPTS):
+        answer = _read(read, f"{question} [{'Y/n' if default else 'y/N'}] ").strip().lower()
+        if not answer:
+            return default
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+        write("  Answer yes or no.")
+    raise ValueError(f"No valid answer (yes or no) after {ATTEMPTS} attempts.")

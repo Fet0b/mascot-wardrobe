@@ -101,3 +101,57 @@ class PromptTests(unittest.TestCase):
         self.assertFalse(is_interactive(False, plain, tty))
         self.assertFalse(is_interactive(False, tty, plain))
         self.assertFalse(is_interactive(False, None, tty))
+
+
+class TemperaturePromptTests(unittest.TestCase):
+    def ask(self, answers, **kwargs):
+        from mascot_wardrobe.interfaces.prompts import ask_temperature
+
+        read, _ = asker(*answers)
+        out = []
+        return ask_temperature(read, out.append, **kwargs), "\n".join(out)
+
+    def test_accepts_celsius_including_decimals_and_negatives(self):
+        self.assertEqual(self.ask(["12.5"])[0], 12.5)
+        self.assertEqual(self.ask([" -7 "])[0], -7.0)
+
+    def test_invalid_answers_reask_with_the_reason_then_fail_after_three(self):
+        value, text = self.ask(["warm", "99", "21"])
+        self.assertEqual(value, 21.0)
+        self.assertIn("number", text)
+        self.assertIn("between -90 and 65", text)
+        with self.assertRaisesRegex(ValueError, "No valid temperature after 3 attempts"):
+            self.ask(["x", "nan", "inf"])
+
+    def test_blank_keeps_only_when_allowed(self):
+        from mascot_wardrobe.interfaces.prompts import KEEP
+
+        self.assertIs(self.ask([""], allow_keep=True)[0], KEEP)
+        with self.assertRaises(ValueError):
+            self.ask(["", "", ""])
+
+    def test_end_of_input_is_not_a_default(self):
+        from mascot_wardrobe.interfaces.prompts import EndOfInput
+
+        with self.assertRaises(EndOfInput):
+            self.ask([])
+
+
+class YesNoPromptTests(unittest.TestCase):
+    def ask(self, answers, default=False):
+        from mascot_wardrobe.interfaces.prompts import ask_yes_no
+
+        read, _ = asker(*answers)
+        return ask_yes_no(read, lambda text: None, "Another piece?", default=default)
+
+    def test_answers_and_defaults(self):
+        self.assertTrue(self.ask(["y"]))
+        self.assertTrue(self.ask(["YES"]))
+        self.assertFalse(self.ask(["n"]))
+        self.assertFalse(self.ask([""]))
+        self.assertTrue(self.ask([""], default=True))
+
+    def test_unclear_answers_reask_then_fail(self):
+        self.assertTrue(self.ask(["maybe", "y"]))
+        with self.assertRaisesRegex(ValueError, "yes or no"):
+            self.ask(["a", "b", "c"])

@@ -7,6 +7,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `mascot-wardrobe closet piece --country XX [--wardrobe NAME]`: an interactive loop that creates
+  one piece at a time. It asks the intended temperature in Celsius (country-profile thresholds),
+  style and palette separately for every piece, renders and saves only that item with provenance,
+  allows a targeted revision that leaves other items untouched, then asks whether to make another.
+  It never touches a channel; publishing stays a separate, explicitly confirmed step.
 - Style and palette choices: `generate` and `closet add`/`edit` take `--style`
   (`classic`, `streetwear` or `auto`) and `--palette` (one to six `#RRGGBB` colours, or `auto`),
   with four palette roles (base, secondary, accent, highlight). `auto` is deterministic and local.
@@ -38,6 +43,10 @@ All notable changes are documented here. The format follows
 
 ### Changed
 
+- Streetwear templates now have their own colour-block layouts (contrast sleeves, side panels,
+  yokes, two-tone splits) that use the palette roles in large areas, instead of one shared layer
+  stack. Fit, lines, protected pixels and clipping are unchanged. This stays within unreleased
+  template set 3, so no new migration is needed.
 - Template revision 3: garments are fitted to the silhouette measured from the image (neck,
   shoulders, torso, hem) instead of fixed fractions of the box, and are built from clipped layers.
   Catalogs and closets from template revision 2 are rejected: regenerate into a new directory, or
