@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -218,6 +219,20 @@ def _protected_matches(image: Image.Image, source: Image.Image, mask: Image.Imag
     )
 
 
+def _check_body_box(box) -> list[float]:
+    """Return a normalized ``[x0, y0, x1, y1]`` fit box or raise ValueError."""
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        raise ValueError("body_box must be four numbers: X1 Y1 X2 Y2.")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in box):
+        raise ValueError("body_box values must be numbers.")
+    x0, y0, x1, y1 = (float(v) for v in box)
+    if not all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in (x0, y0, x1, y1)):
+        raise ValueError("body_box values must be finite and within 0..1.")
+    if not (x0 < x1 and y0 < y1):
+        raise ValueError("body_box must be ordered: X1 < X2 and Y1 < Y2.")
+    return [x0, y0, x1, y1]
+
+
 def _write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(dir=path.parent, prefix=".tmp-", suffix=".part", delete=False)
@@ -251,10 +266,14 @@ class Closet:
     # -- construction -------------------------------------------------------------------------
 
     @classmethod
-    def init(cls, root, mascot_png, edit_mask_png) -> Closet:
-        """Create a closet from a user mascot and an explicit edit mask (both copied verbatim)."""
+    def init(cls, root, mascot_png, edit_mask_png, *, body_box=None) -> Closet:
+        """Create a closet from a user mascot and an explicit edit mask (both copied verbatim).
+
+        ``body_box`` optionally stores a normalized garment fit box, independent of the edit mask.
+        """
         if edit_mask_png is None:
             raise ValueError("An explicit edit mask PNG is required for the identity guarantee.")
+        stored_box = None if body_box is None else _check_body_box(body_box)
         root = _safe_root(Path(root))
         if (root / "closet.json").exists():
             raise ValueError("A closet already exists here; the mascot source is immutable.")
@@ -273,6 +292,8 @@ class Closet:
             "wardrobes": {},
             "active": None,
         }
+        if stored_box is not None:
+            data["body_box"] = stored_box
         _write_atomic(root / "mascot" / "source.png", mascot_bytes)
         _write_atomic(root / "mask" / "edit-mask.png", mask_bytes)
         closet = cls(root, data)
@@ -294,10 +315,10 @@ class Closet:
 
     @classmethod
     def migrate(cls, root, *, dry_run=False) -> dict:
-        """Upgrade a template-set-2 or -3 closet to the current renderer; ``closet.json`` is the commit point.
+        """Upgrade a template-set-2, -3, or -4 closet to current; ``closet.json`` is the commit point.
 
-        Revision 2 items become ``classic``; revision 3 keeps style and choice provenance. New
-        portraits go to ``items-t4/``; old items and catalogs are untouched. The original JSON is
+        Revision 2 items become ``classic``; revisions 3 and 4 keep style and choice provenance. New
+        portraits go to ``items-t5/``; old items and catalogs are untouched. The original JSON is
         kept under ``backups/``. Nothing is written when the plan is refused or ``dry_run`` is set.
         """
         root = _safe_root(Path(root))
@@ -314,7 +335,11 @@ class Closet:
         prior = data.get("renderer")
         if prior not in PRIOR_RENDERER_CONFIGS:
             raise ValueError("Cannot migrate: the closet renderer configuration is not a known legacy one.")
-        supported_dirs = (DEFAULT_ITEMS_DIR,) if prior["templates"] == 2 else (DEFAULT_ITEMS_DIR, "items-t3")
+        supported_dirs = {
+            2: (DEFAULT_ITEMS_DIR,),
+            3: (DEFAULT_ITEMS_DIR, "items-t3"),
+            4: (DEFAULT_ITEMS_DIR, "items-t4"),
+        }[prior["templates"]]
         if data.get("items_dir", DEFAULT_ITEMS_DIR) not in supported_dirs:
             raise ValueError("Cannot migrate: the prior renderer has an unexpected items directory.")
         legacy = cls(root, data)
@@ -455,6 +480,8 @@ class Closet:
         """Raise ValueError unless mascot, mask and every item still match their records."""
         if not isinstance(self._data["items"], dict):
             raise ValueError("closet.json items must be an object.")
+        if "body_box" in self._data:
+            _check_body_box(self._data["body_box"])
         _items_dir(self._data.get("items_dir", DEFAULT_ITEMS_DIR))  # before any path is built
         for item_id, item in self._data["items"].items():
             _check_record_labels(item_id, item)
@@ -478,14 +505,18 @@ class Closet:
         if template not in CATEGORIES:
             raise ValueError(f"template must be one of: {', '.join(CATEGORIES)}.")
         width, height = source.size
-        x0, y0, x1, y1 = self._data["mask"]["bbox"]
-        # Half-pixel offsets keep int(v * n) on the mask bbox despite float rounding; the compositor
-        # measures the silhouette inside the mask, so the mask is its region. A bbox reaching the
-        # image edge is clamped to 1.0, which int(v * n) maps back to the edge exactly.
-        box = tuple(
-            min(1.0, (v + 0.5) / n)
-            for v, n in zip((x0, y0, x1, y1), (width, height, width, height), strict=True)
-        )
+        if "body_box" in self._data:
+            # An explicit fit box is independent of the (possibly wider) paint/edit mask.
+            box = tuple(self._data["body_box"])
+        else:
+            x0, y0, x1, y1 = self._data["mask"]["bbox"]
+            # Half-pixel offsets keep int(v * n) on the mask bbox despite float rounding; the
+            # compositor measures the silhouette inside the mask, so the mask is its region. A bbox
+            # reaching the image edge is clamped to 1.0, which int(v * n) maps back to the edge exactly.
+            box = tuple(
+                min(1.0, (v + 0.5) / n)
+                for v, n in zip((x0, y0, x1, y1), (width, height, width, height), strict=True)
+            )
         brief = OutfitBrief(template, palette, (), box, "closet item", style=style, region=mask)
         dressed = LocalComposer().render(source.copy(), brief)
         result = Image.composite(dressed, source, mask)  # mask 0 keeps every source byte

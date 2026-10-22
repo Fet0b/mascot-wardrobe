@@ -220,6 +220,13 @@ def _closet_parser(commands):
     init.add_argument(
         "--mask", required=True, type=Path, help="Binary PNG mask, same size: 255 editable, 0 protected"
     )
+    init.add_argument(
+        "--body-box",
+        nargs=4,
+        type=float,
+        metavar=("X1", "Y1", "X2", "Y2"),
+        help="Optional normalized (0..1) garment fit box, independent of the edit mask",
+    )
     for name, text in (
         ("add", "Add a clothing item"),
         ("edit", "Edit an item (garment changes bump its version; name/description do not)"),
@@ -316,7 +323,7 @@ def _closet(args, interactive=False, read=input):
     from mascot_wardrobe.closet import Closet
 
     if args.action == "init":
-        closet = Closet.init(args.root, args.mascot, args.mask)
+        closet = Closet.init(args.root, args.mascot, args.mask, body_box=args.body_box)
         return {
             "root": str(closet.root),
             "mascot_sha256": closet.mascot_sha256,
