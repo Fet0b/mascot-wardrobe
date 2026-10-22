@@ -2,10 +2,62 @@
 
 ![mascot-wardrobe: generate once, select by weather](assets/hero.png)
 
-Give it a PNG of your own mascot and it dresses the mascot for six temperature bands. The six
-outfits are generated **once** with local Pillow overlays. After that, picking the right outfit
-for a temperature is a lookup in a manifest: no image work, no network, no model. A persistent
-numbered inventory also keeps garments beyond catalog folders and records your chosen defaults.
+Give it a PNG of your own mascot and it dresses the mascot for six temperature bands, then lets
+the **weather choose the look**. The primary workflow is: keep a named saved wardrobe in an
+identity-locked closet, read the current temperature from the state file your weather updater
+already writes, and let `publish-closet` select the one matching saved look and plan its profile
+photo. The outfits are rendered **once** with local Pillow overlays, so selecting is a lookup:
+no image generation, no model, and no weather request or coordinates in that command.
+
+```sh
+# Dry-run (the default): prints the weather category, item id, slug, hash and a planned WhatsApp
+# channel. Writes nothing, makes no request, never switches the active wardrobe.
+# MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER must be set in the environment (see below).
+mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR \
+  --state-file /path/to/weather/state.json \
+  --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-bridge-url http://127.0.0.1:3000
+```
+
+The bridge header (`Name: value`, whatever your bridge requires) is read from the
+`MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER` environment variable, which you export from a private
+environment file kept outside the repository. This documentation never contains a real header or
+token. The three WhatsApp settings go together; without them the dry-run plans only the
+selection and shows no WhatsApp channel.
+
+`--apply` is the separate, explicit live-change flag: adding it to the same command stages the
+JPEG and changes the WhatsApp profile photo through your bridge. Leave it off to stay in
+dry-run. Nothing here installs a scheduler: hooking the command into an existing hourly job is
+your explicit, opt-in step. See [docs/weather-workflow.md](docs/weather-workflow.md).
+
+Manage saved collections across the default `~/.local/share/mascot-wardrobe` data home:
+
+```sh
+mascot-wardrobe collections list
+mascot-wardrobe collections list --json
+# Copy a stable selector ID from list; repeat --gateway to select both destinations.
+mascot-wardrobe collections select SELECTOR_ID --gateway hermes --gateway whatsapp
+mascot-wardrobe publish-closet --country BR --state-file /path/to/weather/state.json
+# Remove only a non-active named entry; all item assets and inventory are retained.
+mascot-wardrobe collections remove SELECTOR_ID --yes
+```
+
+Listing includes legacy template-set-2/3/4 closets without migration or writes. Removal also
+works on legacy manifests, retaining their schema and all remaining data.
+`collections select` saves a separate publisher choice and never switches the active wardrobe.
+On a terminal, omit the ID and gateways to choose them interactively; scripts must supply the
+ID and explicit `--gateway` flags. `hermes` means the **active Hermes PetDex pet/avatar**. `whatsapp` means the existing WhatsApp profile-photo adapter.
+Both destinations require `--apply` for writes; the saved-selection dry-run above needs no bridge
+settings and reports the planned gateways. Applying WhatsApp requires all three WhatsApp settings
+shown above. See [saved publisher selection](docs/weather-workflow.md#saved-collections-and-publisher-selection)
+for data-directory overrides and full multi-gateway commands. Hermes-only apply needs no WhatsApp
+settings; it requires the Hermes Agent Python environment and CLI. See the
+[local runtime parity map](docs/local-runtime-parity.md) before making a local code mirror or live change.
+
+The original manifest workflow (`generate` → `select` → `demo`/`publish`) remains fully available
+and backward compatible: its arguments, outputs and exit codes are unchanged, as described below.
+A persistent numbered inventory also keeps garments beyond catalog folders and records your chosen
+defaults.
 
 ## Why generate once, select often
 
@@ -161,6 +213,7 @@ Fahrenheit) and the profile schema are in [docs/configuration.md](docs/configura
 - [Architecture](docs/architecture.md) and the [ADRs](docs/adr/)
 - [Configuration, weather and time semantics](docs/configuration.md)
 - [Wardrobe compositor and atlas layout](docs/wardrobe.md)
+- [Weather-first workflow (primary use case)](docs/weather-workflow.md)
 - [Identity-locked closet, wardrobes and catalog](docs/closet.md)
 - [Persistent inventory, range defaults and imports](docs/inventory.md)
 - [Channels (sandbox exports and opt-in live adapters)](docs/channels.md)

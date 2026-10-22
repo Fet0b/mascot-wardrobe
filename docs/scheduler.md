@@ -43,3 +43,28 @@ never installed, and nothing in this repository enables or starts them.
 - Disable and roll back: `systemctl --user disable --now mascot-wardrobe-publish.timer`, remove
   the copied unit files, and delete the bot token from your environment file. A cron line works
   the same way: any scheduler only needs to run the same `publish` command.
+
+## Weather-selected saved-closet looks (core workflow; scheduling is opt-in, never installed)
+
+Selecting a saved look by weather is the project's primary workflow (see
+[weather-workflow.md](weather-workflow.md)); *scheduling* it is not part of the repository.
+Keep the existing hourly timer/service unchanged during code review. This change does not
+perform a schedule hookup or create a duplicate timer. Nothing here installs or enables anything.
+
+`examples/closet-weather/mascot-wardrobe-closet-weather.service.example` runs
+`mascot-wardrobe publish-closet ... --state-file ...` as a dry-run, planning the saved closet
+look matching the current weather category. It reads the temperature from the state file your own
+updater writes, so it makes no weather request and needs no coordinates; see
+[closet.md](closet.md) for the options. Like every template here it carries the `.example`
+suffix, is never installed, and the `publish-closet` command itself schedules nothing: adding it
+to an existing hourly job requires separate review after local parity. Appending `--apply`
+permits real effects; it is absent from the example service command.
+
+Alternatively, save a publisher choice with
+`mascot-wardrobe collections select SELECTOR_ID --gateway hermes --gateway whatsapp`, then omit
+both `--closet-root` and `--wardrobe` from `publish-closet` (or its `weather-run` alias). Use the
+same data home as selection and supply the WhatsApp settings when applying that gateway.
+`hermes` selects the active Hermes PetDex pet/avatar, and WhatsApp changes the profile photo,
+only with `--apply`. Hermes-only apply requires no WhatsApp configuration. See the
+[local runtime parity map](local-runtime-parity.md) for dependencies and verification limits. Neither selection nor a weather run wires, installs or activates a timer. Integration
+with an existing local timer remains a separate review and manual step.

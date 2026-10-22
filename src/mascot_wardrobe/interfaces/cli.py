@@ -83,9 +83,87 @@ def parser():
     publish.add_argument("--telegram-expected-bot-id", type=int, help="Numeric bot id verified with getMe")
     publish.add_argument("--telegram-token-env", default="MASCOT_WARDROBE_TELEGRAM_BOT_TOKEN")
     publish.add_argument("--telegram-state-dir", type=Path, default=DEFAULT_OUT / "state")
+    _publish_closet_parser(commands)
     _closet_parser(commands)
     _inventory_parser(commands)
+    _collections_parser(commands)
     return root
+
+
+def _collections_parser(commands):
+    from mascot_wardrobe.application.collections import GATEWAY_LABELS
+
+    command = commands.add_parser("collections", help="Manage saved named wardrobes across the data home")
+    actions = command.add_subparsers(dest="action", required=True)
+    listing = actions.add_parser(
+        "list", help="List stable selector IDs, names, closet roots, counts and active state"
+    )
+    listing.add_argument("--json", action="store_true")
+    select = actions.add_parser(
+        "select", help="Save a separate weather publisher choice; never switch active wardrobe"
+    )
+    select.add_argument(
+        "selector", nargs="?", help="Stable ID from 'collections list'; prompted on a terminal"
+    )
+    select.add_argument(
+        "--gateway",
+        action="append",
+        choices=tuple(GATEWAY_LABELS),
+        help="Repeat for gateways: hermes = active Hermes PetDex pet/avatar; whatsapp = profile photo",
+    )
+    remove = actions.add_parser(
+        "remove", help="Remove only a named entry; retain all item assets and inventory"
+    )
+    remove.add_argument("selector", help="Stable ID from 'collections list'")
+    remove.add_argument("--yes", action="store_true", help="Required; active wardrobes cannot be removed")
+
+
+def _collection_row(row):
+    return (
+        f"{row['id']}\t{row['wardrobe']}\t{row['closet_root']}\t{row['item_count']}\t"
+        f"{'yes' if row['active'] else 'no'}"
+    )
+
+
+def _collections(args, interactive, read):
+    from mascot_wardrobe.application.collections import (
+        find_collection,
+        list_collections,
+        remove_collection,
+        save_publisher_selection,
+    )
+    from mascot_wardrobe.infrastructure.inventory_store import data_home
+
+    home = data_home(args.data_dir)
+    if args.action == "list":
+        return list_collections(home)
+    if args.action == "remove":
+        return remove_collection(home, args.selector, yes=args.yes)
+    selector = args.selector
+    if selector is None:
+        if not interactive:
+            raise ValueError("Non-interactive selection requires a collection selector ID")
+        rows = list_collections(home)
+        if not rows:
+            raise ValueError("No saved collections found in the data home")
+        for row in rows:
+            print(_collection_row(row), file=sys.stderr)
+        selector = read("Collection selector ID: ").strip()
+    find_collection(home, selector)
+    gateways = args.gateway
+    if not gateways:
+        if not interactive:
+            raise ValueError("Non-interactive selection requires explicit repeated --gateway flags")
+        gateways = (
+            read(
+                "Gateways (one or more, comma/space separated): "
+                "hermes (active PetDex pet/avatar with --apply), "
+                "whatsapp (profile photo with --apply): "
+            )
+            .replace(",", " ")
+            .split()
+        )
+    return save_publisher_selection(home, selector, gateways)
 
 
 def _inventory_parser(commands):
@@ -416,24 +494,126 @@ def _register_saved_item(args, closet, store=None, *, replaces=None):
         ) from error
 
 
-def _publish_targets(args):
-    from mascot_wardrobe.channels.live import (
-        HermesWhatsAppProfileAdapter,
-        TelegramBotProfileAdapter,
-        environment_token_provider,
+def _whatsapp_target(args):
+    from mascot_wardrobe.channels.live import HermesWhatsAppProfileAdapter
+
+    settings = (args.whatsapp_catalog_dir, args.whatsapp_bridge_url, args.whatsapp_bridge_header)
+    if not any(settings):
+        return None
+    if not all(settings):
+        raise ValueError(
+            "whatsapp needs --whatsapp-catalog-dir, --whatsapp-bridge-url and --whatsapp-bridge-header"
+        )
+    adapter = HermesWhatsAppProfileAdapter(
+        args.whatsapp_bridge_url, bridge_header=args.whatsapp_bridge_header
+    )
+    return WhatsAppTarget(args.whatsapp_catalog_dir, adapter)
+
+
+def _publish_closet_parser(commands):
+    command = commands.add_parser(
+        "publish-closet",
+        aliases=["weather-run"],
+        help="Plan a weather-selected look for saved gateways; writes require --apply",
+    )
+    command.add_argument("--closet-root", type=Path, help="Explicit closet; requires --wardrobe")
+    command.add_argument(
+        "--wardrobe", help="Explicit named wardrobe; otherwise use saved publisher selection"
+    )
+    command.add_argument(
+        "--gateway",
+        action="append",
+        choices=("hermes", "whatsapp"),
+        help="Repeat for one or both gateways; defaults to the saved collection choice",
+    )
+    command.add_argument("--country", required=True, help="Explicit country preset")
+    command.add_argument("--profiles", "--profile", dest="profiles", type=Path)
+    temperatures = command.add_mutually_exclusive_group(required=True)
+    temperatures.add_argument("--temperature", type=float, help="Explicit input, not a live weather reading")
+    temperatures.add_argument(
+        "--state-file", type=Path, help="Weather updater state JSON (temperature_c, updated_at_utc)"
+    )
+    command.add_argument("--unit", choices=("C", "F"), default="C")
+    command.add_argument(
+        "--background", default="#102b32", help="Explicit #rrggbb background (default: approved #102b32)"
+    )
+    command.add_argument(
+        "--overlay", type=Path, help="Optional square RGBA PNG you supply; clipped to the circular-safe area"
+    )
+    command.add_argument(
+        "--overlay-start-date", help="Inclusive UTC date, YYYY-MM-DD; requires overlay and end date"
+    )
+    command.add_argument(
+        "--overlay-end-date", help="Inclusive UTC date, YYYY-MM-DD; requires overlay and start date"
+    )
+    command.add_argument(
+        "--apply",
+        action="store_true",
+        help="Select the active Hermes PetDex pet and/or update the WhatsApp photo; default is a dry-run",
+    )
+    command.add_argument(
+        "--whatsapp-catalog-dir", type=Path, help="Approved photo directory read by the bridge"
+    )
+    command.add_argument("--whatsapp-bridge-url", help="Loopback bridge URL, e.g. http://127.0.0.1:3000")
+    command.add_argument(
+        "--whatsapp-bridge-header",
+        default=os.environ.get("MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER"),
+        help="'Name: value' header the bridge requires (or env MASCOT_WARDROBE_WHATSAPP_BRIDGE_HEADER)",
     )
 
-    whatsapp = telegram = None
-    settings = (args.whatsapp_catalog_dir, args.whatsapp_bridge_url, args.whatsapp_bridge_header)
-    if any(settings):
-        if not all(settings):
-            raise ValueError(
-                "whatsapp needs --whatsapp-catalog-dir, --whatsapp-bridge-url and --whatsapp-bridge-header"
-            )
-        adapter = HermesWhatsAppProfileAdapter(
-            args.whatsapp_bridge_url, bridge_header=args.whatsapp_bridge_header
-        )
-        whatsapp = WhatsAppTarget(args.whatsapp_catalog_dir, adapter)
+
+def _publish_closet(args):
+    from mascot_wardrobe.application.closet_weather import (
+        overlay_for_date,
+        publish_closet_look,
+        read_weather_state,
+    )
+
+    if (args.closet_root is None) != (args.wardrobe is None):
+        raise ValueError("Explicit publishing requires both --closet-root and --wardrobe")
+    gateways = args.gateway
+    if args.wardrobe is None:
+        from mascot_wardrobe.application.collections import read_publisher_selection
+        from mascot_wardrobe.infrastructure.inventory_store import data_home
+
+        home = data_home(args.data_dir)
+        selection = read_publisher_selection(home)
+        args.closet_root, args.wardrobe = Path(selection["closet_root"]), selection["wardrobe"]
+        gateways = gateways or selection["gateways"]
+    if args.state_file is not None:
+        if args.unit != "C":
+            raise ValueError("The state file is in Celsius; --unit F only applies to --temperature")
+        reading = read_weather_state(args.state_file)
+        temperature, unit = reading.temperature_c, "C"
+        weather = {
+            "source": reading.source,
+            "temperature_c": reading.temperature_c,
+            "observed_at": reading.observed_at.isoformat(),
+        }
+    else:
+        temperature, unit = args.temperature, args.unit
+        weather = {"source": "explicit-input-not-live-weather"}
+    return publish_closet_look(
+        args.closet_root,
+        args.wardrobe,
+        args.country,
+        temperature,
+        unit,
+        weather=weather,
+        profiles=args.profiles,
+        background=args.background,
+        overlay=overlay_for_date(args.overlay, args.overlay_start_date, args.overlay_end_date),
+        apply=args.apply,
+        whatsapp=_whatsapp_target(args) if gateways is None or "whatsapp" in gateways else None,
+        gateways=gateways,
+    )
+
+
+def _publish_targets(args):
+    from mascot_wardrobe.channels.live import TelegramBotProfileAdapter, environment_token_provider
+
+    whatsapp = _whatsapp_target(args)
+    telegram = None
     if args.telegram:
         if args.telegram_expected_bot_id is None:
             raise ValueError("--telegram requires --telegram-expected-bot-id")
@@ -610,6 +790,15 @@ def main(argv=None, *, interactive=None, read=input):
     elif interactive is None:
         interactive = is_interactive(False, sys.stdin, sys.stderr)
     try:
+        if args.command == "collections":
+            result = _collections(args, interactive, read)
+            if args.action == "list" and not args.json:
+                print("ID\tWardrobe\tCloset root\tItems\tActive")
+                for row in result:
+                    print(_collection_row(row))
+            else:
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "inventory":
             result = _inventory(args, interactive, read)
             if args.action == "list" and not args.json:
@@ -620,6 +809,10 @@ def main(argv=None, *, interactive=None, read=input):
             else:
                 print(json.dumps(result, ensure_ascii=False, indent=2))
             return 3 if isinstance(result, dict) and result.get("status") == "no-default" else 0
+        if args.command in ("publish-closet", "weather-run"):
+            result = _publish_closet(args)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["ok"] else 1
         if args.command == "closet":
             print(json.dumps(_closet(args, interactive, read), ensure_ascii=False, indent=2))
             return 0

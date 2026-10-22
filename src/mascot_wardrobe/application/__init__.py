@@ -194,7 +194,7 @@ def publish_outfit(selection, *, apply=False, force=False, whatsapp=None, telegr
         "slug": selection["slug"],
         "category": selection["category"],
         "jpg": selection["jpg"],
-        "atlas": selection["atlas"],
+        "atlas": selection.get("atlas"),
         "jpg_sha256": digest,
         "channels": channels,
         "ok": all(item["status"] != "failed" for item in channels.values()),

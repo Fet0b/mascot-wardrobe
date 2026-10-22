@@ -7,6 +7,25 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- `collections list/select/remove`: stable selectors across saved closets, a separate atomic
+  weather-publisher choice with repeated `--gateway hermes --gateway whatsapp`, and guarded
+  removal of non-active named entries with `--yes` while retaining all item assets and inventory.
+  Listing and removal accept legacy template-set-2/3/4 schema-1 manifests without migration.
+  `publish-closet` (alias `weather-run`) can use the saved choice; `hermes` selects the active local
+  Hermes PetDex pet/avatar using a Pillow atlas, digest-qualified slug, byte-equivalent reuse and
+  CLI readback/rollback. WhatsApp uses the existing profile adapter. Both require `--apply` for
+  writes; dry-run remains deterministic with no network calls or filesystem writes. No scheduler
+  is installed, wired or activated. Read-only publishing/selection supports legacy collections
+  without migration. Optional overlays accept inclusive UTC date bounds. A parity map and portable
+  `scripts/check_local_parity.py --source ROOT --copy ROOT` support later code-only mirror review.
+- `publish-closet`: selects exactly one item of a saved closet wardrobe by the country profile's
+  weather category (missing, duplicate, stale or unsafe input fails closed) and renders its exact
+  saved PNG as a 1024x1024 JPEG on `#102b32`, circular-safe, with an optional externally supplied
+  overlay clipped to that area. The temperature comes from `--temperature` or from the weather
+  updater's state JSON (`--state-file`, `updated_at_utc`). Dry-run is the default and writes
+  nothing; `--apply` stages the JPEG and uses the existing WhatsApp adapter with readback and
+  idempotence. The closet, inventory, active wardrobe and Telegram are never touched. An
+  uninstalled scheduler example lives in `examples/closet-weather/`.
 - Persistent format-agnostic inventory with stable garment numbers, transactional storage,
   backups, locking, hash verification and static PNG asset imports. Manifest and closet imports
   are idempotent; ambiguous closet identities are refused and explicit edits use hash guards.

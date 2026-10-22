@@ -172,6 +172,117 @@ A wardrobe pins each item's `version` and `sha256`. If an item is edited afterwa
 `catalog` refuse the wardrobe as **stale** until you `save` it again; it is never silently
 updated.
 
+### Manage saved collections across closets
+
+The `collections` group discovers named wardrobes in every `closet.json` below the data home
+(default `~/.local/share/mascot-wardrobe`, with the same environment/XDG overrides as inventory).
+An optional global `--data-dir PATH` precedes the command. Discovery does not follow symlinked
+directories or create an inventory. IDs identify the closet path relative to the data home plus
+the wardrobe name, remain stable when another collection is added or removed, and distinguish
+identical wardrobe names in different closets. Moving or renaming a closet changes its IDs.
+Listing reads schema-1 collection metadata directly, including legacy template-set-2/3/4
+closets, without requiring migration or verifying rendered assets. It never modifies saved data.
+Closets with no named wardrobe entries contribute no rows; their loose items remain untouched.
+
+```sh
+mascot-wardrobe collections list
+mascot-wardrobe collections list --json
+mascot-wardrobe collections select SELECTOR_ID --gateway hermes --gateway whatsapp
+mascot-wardrobe collections remove SELECTOR_ID --yes
+# Use a different data home for every operation, including publishing:
+mascot-wardrobe --data-dir /path/to/data collections list
+```
+
+`list` shows stable selector ID, wardrobe name, closet root, item count and whether that wardrobe
+is active **within its owning closet**. `select` writes only `weather-publisher.json` in the data
+home, atomically storing the closet path, wardrobe name and gateways. It never calls `closet use`,
+changes the active wardrobe or writes inventory. On a terminal, omit the ID to choose a collection,
+then answer the gateway prompt with `hermes,whatsapp` (or one gateway). In non-interactive mode,
+including global `--no-input`, supply an ID and repeat `--gateway` for each desired destination.
+
+`remove` requires explicit `--yes` and refuses the owning closet's active wardrobe. It removes
+**only the named wardrobe entry** from that closet's manifest. All item records, item assets,
+mascot/mask files, inventory entries and catalog files are retained; retained catalog files may
+refer to the removed wardrobe. Removing a selected collection leaves its publisher selection
+invalid: the next weather run fails closed until you select an existing collection again.
+Removal also supports those legacy manifests: it preserves the renderer, schema, active wardrobe
+and every other manifest field. Listing/removal never invoke migration. Selection and publishing
+explicitly skip only renderer-version compatibility: hashes, protected pixels and saved item
+versions are still verified. Legacy collections are read without rewriting any closet files.
+
+Gateway `hermes` selects the **active local Hermes PetDex pet/avatar**, using an animated
+atlas from the exact selected PNG. Registration alone does not select a pet. The adapter uses
+the Hermes CLI and verifies the slug, rolling back on selection/readback failure. Gateway `whatsapp` uses the existing profile-photo adapter. Publishing through
+either requires `--apply`; details and full multi-gateway commands are in
+[weather-workflow.md](weather-workflow.md#saved-collections-and-publisher-selection).
+
+## Weather-aware publishing (`publish-closet`)
+
+`publish-closet` picks **one** saved item of a named wardrobe by the country profile's weather
+category and, only with `--apply`, sets it as the WhatsApp profile photo of the connected account
+itself. The classifier is the existing `CountryProfile` (`profiles.json` or `--profiles`); no
+threshold is duplicated. Each item's `template` is its category, so a wardrobe is usable only
+when it holds exactly one item per category: a missing or duplicate category, an unknown or stale
+wardrobe, an invalid temperature, or an item that fails its hash check stops the command (exit
+2) before anything is written. The exact saved item PNG is used; nothing is regenerated, the
+closet and the inventory are never written, and the active wardrobe is not switched.
+
+Omit **both** `--closet-root` and `--wardrobe` to use the separate saved publisher selection.
+`weather-run` is an alias of `publish-closet`. Explicitly supplying both retains the original
+behavior and takes precedence over the saved selection; passing only one is an error. A saved
+selection routes the exact chosen PNG to the selected gateways: Hermes receives an 8×9 PetDex
+atlas; WhatsApp receives a profile JPEG. Repeat `--gateway hermes --gateway whatsapp` to override
+the saved gateway choice for a run, or pass either alone. Hermes-only `--apply` needs no WhatsApp
+settings. It requires the Hermes Python environment and CLI; see [runtime parity](local-runtime-parity.md).
+A selected WhatsApp gateway may be planned without bridge settings,
+but applying it requires the complete settings below. No timer is wired or activated by selecting.
+
+```sh
+# Dry-run (default): prints category, item id, slug, hash and the intended action. No writes, no requests.
+mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR \
+  --state-file /path/to/weather/state.json \
+  --whatsapp-catalog-dir /path/to/bridge/approved-photos \
+  --whatsapp-bridge-url http://127.0.0.1:3000 --whatsapp-bridge-header 'X-Example: 1'
+
+# Manual temperature instead of a state file (Celsius, or --unit F)
+mascot-wardrobe publish-closet --closet-root closet --wardrobe my-looks --country BR --temperature 22
+
+# Opt-in live change: stage the JPEG in the approved directory and sync through the bridge
+mascot-wardrobe publish-closet ... --apply
+```
+
+- **Temperature**: `--temperature` (explicit) or `--state-file`, the JSON your weather updater
+  writes. It must hold a numeric `temperature_c` and a timezone-aware `updated_at_utc`
+  (`current_time_utc` is read only if `updated_at_utc` is absent). Older than 3 hours, more than
+  15 minutes in the future, naive, non-regular (symlink, directory) or oversized state is refused.
+  No weather request and no coordinates are involved. State files are always Celsius.
+- **Image**: a 1024x1024 JPEG on the explicit background `#102b32` (`--background '#rrggbb'`
+  overrides it). The item's visible pixels are scaled, never redrawn, so that the farthest
+  one sits inside 86% of the inscribed circle: a circular crop never clips the mascot.
+- **Overlay**: `--overlay file.png` composites a square RGBA PNG that *you* supply (the project
+  ships none), clipped to the same circular-safe area.
+- **Slug**: `closet-<wardrobe>-<item id>`, checked against the bridge's own slug rule before any
+  write. Closet names are lowercase letters, digits and hyphens only (up to 40 characters), so an
+  id containing an underscore is refused when the closet opens.
+- **WhatsApp apply**: needs the three `--whatsapp-*` settings; the existing adapter reads the photo back
+  and reports `updated` or `unchanged` (a repeat run changes nothing). Exit 1 if the bridge
+  fails. There is no Telegram option and nothing touches a local pet.
+
+**This CLI feature does not activate any timer.** Installing it never schedules anything; the
+only scheduler artifact is the uninstalled `examples/closet-weather/` template (see
+[scheduler.md](scheduler.md)). Wiring it into an existing hourly job is your explicit step.
+
+An overlay may be date-limited with `--overlay-start-date YYYY-MM-DD --overlay-end-date YYYY-MM-DD`
+(inclusive UTC dates, both required with `--overlay`). Without bounds it applies whenever supplied.
+The overlay affects the profile JPEG; the PetDex atlas uses the saved item itself.
+
+**Rollback**: Hermes automatically reselects/verifies the previous slug if selection/readback fails.
+To manually restore a reviewed slug, use `hermes pets select PREVIOUS_SLUG` and
+`hermes config get display.pet.slug`. Never hand-edit config.yaml. For WhatsApp, remove
+`--apply` (or the scheduler entry) to stop changes; to undo a published photo, run the command again with a different `--wardrobe` or `--temperature`, or restore the old
+photo through the bridge. Deleting a staged `<slug>.jpg` from the approved directory removes only
+the staged copy.
+
 ## Catalog sheet
 
 ```
@@ -247,7 +358,7 @@ in the mask only when they are editable. No mask is generated automatically.
 - No automatic mask or body detection; you author the mask.
 - The closet renderer uses the six built-in templates in two styles, with no external reference
   images. Existing garment PNGs can be imported into the separate persistent inventory.
-- No per-category (weather) mapping of closet wardrobes, and no
-  wiring into `select` / `publish` yet.
+- Weather publishing of a saved wardrobe is the separate, opt-in `publish-closet` command (above);
+  `select` and `publish` still use the generated manifest.
 - Item writes are atomic per file, but `closet.json` and an item file are not updated in one
   transaction: a crash between them is reported by the next hash check, not repaired.

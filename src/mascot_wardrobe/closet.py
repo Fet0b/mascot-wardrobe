@@ -301,7 +301,12 @@ class Closet:
         return closet
 
     @classmethod
-    def open(cls, root) -> Closet:
+    def open(cls, root, *, renderer_check=True) -> Closet:
+        """Open with integrity checks; read-only consumers may skip renderer compatibility only.
+
+        ``renderer_check=False`` never migrates assets or bypasses hashes/protected pixels.
+        Rendering and mutation methods still require the current renderer.
+        """
         root = _safe_root(Path(root))
         try:
             data = json.loads(_read_file(root / "closet.json", "closet.json").decode("utf-8"))
@@ -310,7 +315,7 @@ class Closet:
         if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
             raise ValueError(f"Unsupported closet schema; this version reads schema {SCHEMA_VERSION}.")
         closet = cls(root, data)
-        closet.verify()
+        closet.verify(renderer_check=renderer_check)
         return closet
 
     @classmethod
@@ -692,9 +697,9 @@ class Closet:
         self._save()
         return {"name": name, **self.wardrobes()[name]}
 
-    def _checked_wardrobe(self, name) -> dict:
+    def _checked_wardrobe(self, name, *, renderer_check=True) -> dict:
         _name(name, "wardrobe name")
-        self.verify()
+        self.verify(renderer_check=renderer_check)
         try:
             wardrobe = self._data["wardrobes"][name]
         except KeyError:
@@ -706,6 +711,23 @@ class Closet:
                     f"Wardrobe {name} is stale: item {entry['id']} changed since it was saved; re-save it."
                 )
         return wardrobe
+
+    def wardrobe_entries(self, name, *, renderer_check=True) -> list:
+        """Read-only copy of a verified, non-stale wardrobe's entries; never changes ``active``."""
+        return json.loads(json.dumps(self._checked_wardrobe(name, renderer_check=renderer_check)["items"]))
+
+    def remove_wardrobe(self, name) -> None:
+        """Remove only a non-active named entry; retain items, assets, catalogs and inventory."""
+        _name(name, "wardrobe name")
+        self.verify()
+        if name not in self._data["wardrobes"]:
+            raise ValueError(f"Unknown wardrobe {name}.")
+        if self.active == name:
+            raise ValueError(f"Cannot remove active wardrobe {name}.")
+        data = json.loads(json.dumps(self._data))
+        del data["wardrobes"][name]
+        _write_atomic(self.root / "closet.json", json.dumps(data, indent=2, sort_keys=True).encode())
+        self._data = data
 
     def use_wardrobe(self, name) -> dict:
         wardrobe = self._checked_wardrobe(name)
