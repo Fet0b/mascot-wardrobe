@@ -7,6 +7,14 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Review-snapshot coverage ledger, portable legacy four-band weather validation, timezone-aware
+  overlay windows shared by portraits and PetDex, and synthetic safety tests. WhatsApp apply now
+  backs up the observed original photo, locks staging/delivery, polls readback three times and
+  atomically preserves last-good state. Combined apply preflights both profiles and restores
+  Hermes on later WhatsApp failure where supported, reporting partial/rollback outcomes.
+  Runtime/service boundaries and old avatar post-hook replacement are documented; no live
+  runtime or schedule is changed.
+
 - `collections list/select/remove`: stable selectors across saved closets, a separate atomic
   weather-publisher choice with repeated `--gateway hermes --gateway whatsapp`, and guarded
   removal of non-active named entries with `--yes` while retaining all item assets and inventory.
@@ -16,7 +24,7 @@ All notable changes are documented here. The format follows
   CLI readback/rollback. WhatsApp uses the existing profile adapter. Both require `--apply` for
   writes; dry-run remains deterministic with no network calls or filesystem writes. No scheduler
   is installed, wired or activated. Read-only publishing/selection supports legacy collections
-  without migration. Optional overlays accept inclusive UTC date bounds. A parity map and portable
+  without migration. Optional overlays accept inclusive dates in an explicit IANA timezone. A parity map and portable
   `scripts/check_local_parity.py --source ROOT --copy ROOT` support later code-only mirror review.
 - `publish-closet`: selects exactly one item of a saved closet wardrobe by the country profile's
   weather category (missing, duplicate, stale or unsafe input fails closed) and renders its exact

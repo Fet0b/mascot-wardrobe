@@ -5,6 +5,7 @@ stored: they come from an injected provider or an environment variable.
 """
 
 import base64
+import fcntl
 import hashlib
 import io
 import ipaddress
@@ -12,7 +13,10 @@ import json
 import math
 import os
 import re
+import time
 import uuid
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
@@ -223,7 +227,12 @@ class HermesWhatsAppProfileAdapter:
     only a slug; the bridge reads ``<slug>.jpg`` from its own approved photo directory.
     """
 
-    def __init__(self, base_url, *, bridge_header, timeout=10, opener=None):
+    def __init__(
+        self, base_url, *, bridge_header, timeout=10, opener=None, state_dir=None, pause=None, now=None
+    ):
+        self.state_dir = Path(state_dir) if state_dir is not None else None
+        self.pause = pause or time.sleep
+        self.now = now or (lambda: datetime.now(UTC))
         self.base_url = self._validate_url(base_url)
         self._header = self._validate_header(bridge_header)
         if (
@@ -303,22 +312,78 @@ class HermesWhatsAppProfileAdapter:
                 raise RuntimeError("Inconsistent readback image and hash") from None
         return observed["matches"], digest
 
-    def sync(self, slug):
+    def _state_paths(self):
+        from mascot_wardrobe.infrastructure.inventory_store import _safe_path
+
+        if self.state_dir is None:
+            raise ValueError("WhatsApp sync requires a private state directory")
+        directory = _safe_path(self.state_dir)
+        if directory.exists() and not directory.is_dir():
+            raise ValueError("WhatsApp state directory must be a directory")
+        for name in ("avatar-sync.lock", "avatar-sync.json", "whatsapp-profile-before-sync.jpg"):
+            path = _safe_path(directory / name)
+            if path.exists() and not path.is_file():
+                raise ValueError("Unsafe WhatsApp state file")
+        return directory
+
+    @contextmanager
+    def locked(self):
+        """Serialize cooperating own-account publishers, including catalog staging."""
+        directory = self._state_paths()
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "avatar-sync.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+
+    def preflight(self, slug):
+        """Read-only bridge/state checks; the candidate must already be in the catalog."""
         from mascot_wardrobe.channels import _slug
 
         _slug(slug)
+        directory = self._state_paths()
+        observed = self._request("GET", "/profile-picture?" + urlencode({"slug": slug}))
+        matches, _ = self._validate_readback(observed, slug)
+        if not matches and not (directory / "whatsapp-profile-before-sync.jpg").exists():
+            if not observed.get("imageBase64"):
+                raise RuntimeError("Cannot back up the currently observed own-account photo")
+        return observed
+
+    def sync(self, slug, *, target="self"):
+        from mascot_wardrobe.channels import _slug
+
+        _slug(slug)
+        if target != "self":
+            raise ValueError("WhatsApp target must be self")
+        with self.locked():
+            return self._sync(slug)
+
+    def _sync(self, slug):
+        from mascot_wardrobe.channels import _atomic
+
+        directory = self._state_paths()
         path = "/profile-picture?" + urlencode({"slug": slug})
-        matches, digest = self._validate_readback(self._request("GET", path), slug)
+        observed = self.preflight(slug)
+        matches, digest = self._validate_readback(observed, slug)
+        backup = directory / "whatsapp-profile-before-sync.jpg"
         action = "unchanged"
         if not matches:
+            if not backup.exists():
+                image = observed.get("imageBase64")
+                if not image:
+                    raise RuntimeError("Cannot back up the currently observed own-account photo")
+                _atomic(backup, base64.b64decode(image, validate=True))
             ack = self._request("POST", "/profile-picture", {"slug": slug})
             if ack.get("success") is not True or ack.get("target") != "self":
                 raise RuntimeError("Upload not acknowledged for the connected account itself")
             action = "updated"
-            matches, digest = self._validate_readback(self._request("GET", path), slug)
-            if not matches:
+            for attempt in range(3):
+                self.pause(2 * (attempt + 1))
+                matches, digest = self._validate_readback(self._request("GET", path), slug)
+                if matches:
+                    break
+            else:
                 raise RuntimeError("Upload acknowledged but readback is not verified")
-        return {
+        result = {
             "channel": "whatsapp-hermes-bridge",
             "slug": slug,
             "action": action,
@@ -328,4 +393,7 @@ class HermesWhatsAppProfileAdapter:
             "sandbox": False,
             "remote_sha256": digest,
             "verification": "bridge-readback-match",
+            "checked_at_utc": self.now().isoformat(),
         }
+        _atomic(directory / "avatar-sync.json", json.dumps(result, sort_keys=True).encode())
+        return result

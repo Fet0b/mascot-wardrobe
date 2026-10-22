@@ -124,3 +124,57 @@ def test_public_config_manifests_are_compared_even_when_named_config_yaml(tmp_pa
     result = compare(source, copy)
     assert result.returncode == 1
     assert json.loads(result.stdout)["extra"] == ["examples/config/config.yaml"]
+
+
+def test_coverage_ledger_maps_all_source_families_and_explicit_external_boundaries():
+    doc = (ROOT / "docs" / "local-copy-coverage.md").read_text()
+    for name in (
+        "local-runtime/badge_policy.py",
+        "local-runtime/sync_avatar.py",
+        "local-runtime/updater.py",
+        "legacy/assets/build_profile_assets.py",
+        "legacy/assets/show_all_versions.py",
+        "legacy/whatsapp-bridge/profile_api.js",
+        "legacy/whatsapp-bridge/profile_api.test.js",
+        "legacy/whatsapp-bridge/owner_message_gate.js",
+        "legacy/whatsapp-bridge/package-lock.json",
+        "src/mascot_wardrobe/wardrobe/NOTAS.md",
+        "docs/wardrobe-tests.txt",
+        "legacy/ORIGINAL-README.md",
+        "tests/test_avatar_safety.py",
+        "tests/test_legacy_weather.py",
+        "tests/test_combined_apply.py",
+        "generated",
+        "external",
+        "three",
+        "post-hook",
+    ):
+        assert name in doc, name
+    assert "file hashes" in doc
+
+
+def test_review_service_explicitly_resets_old_post_hook_without_installing():
+    text = (ROOT / "examples/closet-weather/mascot-wardrobe-closet-weather.service.example").read_text()
+    assert "ExecStartPost=" in text
+    assert "sync_avatar.py" in text
+    assert "overwrite" in text
+    assert "separate approval" in text
+
+
+def test_parity_doc_records_local_timezone_and_different_weather_policies():
+    text = (ROOT / "docs/local-runtime-parity.md").read_text()
+    for needle in (
+        "2026-10-29T02:59:59Z",
+        "2026-10-29T03:00:00Z",
+        "America/Sao_Paulo",
+        "<15",
+        "<22",
+        "<28",
+        "last-good",
+        "three",
+        "rollback",
+        "local-copy-coverage.md",
+    ):
+        assert needle in text, needle
+    assert "inclusive UTC date bounds" not in text
+    assert "A read-only audit also verified all four existing local collections" not in text

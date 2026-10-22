@@ -72,13 +72,9 @@ def _clip_to_safe_circle(overlay):
     return overlay
 
 
-def compose_profile_jpeg(png_bytes, *, background=DEFAULT_BACKGROUND, overlay=None):
-    """Center the item's visible pixels on ``background`` inside the circular-safe area.
-
-    ``overlay`` is an optional, externally supplied square RGBA PNG drawn on top; this project
-    ships none.
-    """
-    color = parse_background(background)
+def compose_profile_image(png_bytes, *, background=None, overlay=None):
+    """Shared portrait/atlas composition; transparent background unless explicitly supplied."""
+    color = (*parse_background(background), 255) if background is not None else (0, 0, 0, 0)
     item = _decode_png(png_bytes, "The item")
     mask = item.getchannel("A").point(lambda a: 255 if a > _VISIBLE_ALPHA else 0)
     box = mask.getbbox()
@@ -87,10 +83,17 @@ def compose_profile_jpeg(png_bytes, *, background=DEFAULT_BACKGROUND, overlay=No
     item = item.crop(box)
     scale = SAFE_RADIUS_FRACTION * SIZE / 2 / _farthest_visible_pixel(mask.crop(box))
     item = item.resize((round(item.width * scale), round(item.height * scale)), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (SIZE, SIZE), (*color, 255))
+    canvas = Image.new("RGBA", (SIZE, SIZE), color)
     canvas.alpha_composite(item, ((SIZE - item.width) // 2, (SIZE - item.height) // 2))
     if overlay is not None:
         canvas.alpha_composite(_clip_to_safe_circle(_read_overlay(overlay)))
+    return canvas
+
+
+def compose_profile_jpeg(png_bytes, *, background=DEFAULT_BACKGROUND, overlay=None):
+    """Square JPEG with caller-supplied optional overlay; this project ships no badge artwork."""
+    parse_background(background)
+    canvas = compose_profile_image(png_bytes, background=background, overlay=overlay)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, "JPEG", quality=92, subsampling=0, optimize=True)
     from mascot_wardrobe.channels.live import validate_profile_jpeg

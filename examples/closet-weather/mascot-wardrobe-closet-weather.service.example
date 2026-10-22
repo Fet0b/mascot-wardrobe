@@ -18,7 +18,19 @@
 #     --state-file /path/to/weather/state.json
 # Optional: --overlay /path/to/your-overlay.png (square RGBA PNG you supply; it is clipped to the
 # circular-safe area) and --background '#102b32'.
-# Roll back: remove the unit, or run the command again after restoring the previous photo.
+# Existing-service review (requires separate approval; do not install this file automatically):
+# The old sync_avatar.py post-hook can overwrite the new WhatsApp photo. In a separately reviewed
+# drop-in for THAT service, first clear ALL inherited post-hooks, then replace with the publisher:
+#   [Service]
+#   ExecStartPost=
+#   ExecStartPost=/path/to/venv/bin/mascot-wardrobe publish-closet --country BR --state-file /path/to/weather/state.json
+# Keep this dry-run until delivery and candidates are approved. If using a standalone publisher
+# service instead, disable/remove the old avatar post-hook before enabling it; do not run both.
+# Review the old badge pre-hook and updater separately: they can still mutate installed Hermes pets.
+# Do not clear the weather producer blindly; establish a read-only fresh-state hand-off first.
+# Current location/cadence remain unresolved. No real location/account is configured here.
+# Rollback: remove the reviewed drop-in, restore the old hook if intended, and separately restore
+# the previous Hermes slug/photo from verified state/backup. Removing a unit does not restore photos.
 [Unit]
 Description=Publish the weather-selected closet look to WhatsApp (example)
 

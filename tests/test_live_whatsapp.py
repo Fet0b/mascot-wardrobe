@@ -138,7 +138,11 @@ def fake_bridge(mode="ok", initially_matching=False):
 
 class BridgeAdapterTests(unittest.TestCase):
     def adapter(self, url, **kwargs):
-        return HermesWhatsAppProfileAdapter(url, bridge_header=HEADER, **kwargs)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        return HermesWhatsAppProfileAdapter(
+            url, bridge_header=HEADER, state_dir=temporary.name, pause=lambda seconds: None, **kwargs
+        )
 
     def test_updates_only_after_mismatch_and_verifies_by_readback(self):
         with fake_bridge() as (url, events):

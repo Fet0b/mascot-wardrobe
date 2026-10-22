@@ -6,9 +6,11 @@ Read-only on the closet: no regeneration, no inventory write, no change of the a
 import hashlib
 import json
 import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mascot_wardrobe.closet import Closet
 from mascot_wardrobe.domain.models import to_celsius, validate_temperature
@@ -30,8 +32,8 @@ class StateReading:
     source: str = "state-file"
 
 
-def overlay_for_date(overlay, start, end, *, now=None):
-    """Enable external artwork within an optional inclusive UTC calendar-date window."""
+def overlay_for_date(overlay, start, end, *, timezone="UTC", now=None):
+    """Enable supplied artwork within inclusive calendar dates in an explicit IANA timezone."""
     if start is None and end is None:
         return overlay
     if overlay is None or start is None or end is None:
@@ -42,7 +44,14 @@ def overlay_for_date(overlay, start, end, *, now=None):
         raise ValueError("Overlay dates must be YYYY-MM-DD") from error
     if first > last:
         raise ValueError("Overlay start date must not follow its end date")
-    today = (now or datetime.now(UTC)).astimezone(UTC).date()
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        raise ValueError("Overlay reference time must be timezone-aware")
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        raise ValueError("Unknown overlay timezone") from None
+    today = now.astimezone(zone).date()
     return overlay if first <= today <= last else None
 
 
@@ -156,9 +165,9 @@ def publish_closet_look(
     """Plan in memory; ``apply`` gates active PetDex selection and WhatsApp own-profile writes.
 
     ``hermes`` may inject an adapter. No Hermes runtime is loaded or called during dry-run.
-    All image/configuration preflight completes before the first selected gateway writes.
+    Both target preflights complete before either selected profile changes.
     """
-    from mascot_wardrobe.application import publish_outfit
+    from mascot_wardrobe.application import prepare_whatsapp_delivery
     from mascot_wardrobe.application.collections import validate_gateways
     from mascot_wardrobe.channels import _slug
 
@@ -181,7 +190,7 @@ def publish_closet_look(
     if "hermes" in gateways:
         from mascot_wardrobe.wardrobe.petdex import build_atlas
 
-        atlas = build_atlas(png)
+        atlas = build_atlas(png, overlay=overlay)
         channels["hermes"] = {
             "status": "planned",
             "target": "active-hermes-petdex",
@@ -212,18 +221,33 @@ def publish_closet_look(
 
                 hermes = HermesPetAdapter()
             prepared = hermes.preflight(atlas)
-            try:
-                channels["hermes"].update(hermes.apply(atlas, prepared=prepared), status="applied")
-            except (ValueError, OSError, RuntimeError) as error:
-                channels["hermes"].update(status="failed", error=str(error))
-        if "whatsapp" in gateways:
-            with tempfile.TemporaryDirectory(prefix="closet-look-") as staging:
+        with ExitStack() as stack:
+            if "whatsapp" in gateways:
+                staging = stack.enter_context(tempfile.TemporaryDirectory(prefix="closet-look-"))
                 staged = Path(staging) / (look["slug"] + ".jpg")
                 staged.write_bytes(jpeg)
                 selection = {"slug": look["slug"], "category": look["category"], "jpg": str(staged)}
-                published = publish_outfit(selection, apply=True, whatsapp=whatsapp)
-                channels.update(published["channels"])
-        ok = all(channel["status"] != "failed" for channel in channels.values())
+                deliver = stack.enter_context(prepare_whatsapp_delivery(whatsapp, selection, preflight=True))
+            # Both selected targets have passed preflight before either profile changes.
+            if "hermes" in gateways:
+                try:
+                    channels["hermes"].update(hermes.apply(atlas, prepared=prepared), status="applied")
+                except (ValueError, OSError, RuntimeError) as error:
+                    channels["hermes"].update(status="failed", error=str(error))
+            if "whatsapp" in gateways:
+                try:
+                    channels["whatsapp"] = deliver()
+                except (ValueError, OSError, RuntimeError) as error:
+                    channels["whatsapp"] = {"status": "failed", "error": str(error)}
+                    if channels.get("hermes", {}).get("status") == "applied":
+                        rollback = getattr(hermes, "rollback", None)
+                        if rollback is not None:
+                            try:
+                                restored = rollback(prepared)
+                                channels["hermes"].update(status="rolled-back", rollback=restored)
+                            except (ValueError, OSError, RuntimeError) as rollback_error:
+                                channels["hermes"].update(status="rollback-failed", error=str(rollback_error))
+        ok = all(channel["status"] == "applied" for channel in channels.values())
         report = _report(look, weather, background, jpeg, "apply", channels, ok)
         report["overlay"] = overlay is not None
         report["action"] = f"attempted delivery to {target}; see channels for outcomes"

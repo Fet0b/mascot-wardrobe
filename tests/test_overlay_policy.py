@@ -89,3 +89,74 @@ def test_cli_maps_date_policy_to_profile_composition_without_filesystem_changes(
     assert json.loads(plain)["jpg_sha256"] != json.loads(marked)["jpg_sha256"]
     assert json.loads(plain)["jpg_sha256"] == json.loads(expired)["jpg_sha256"]
     assert tree_state(home.parent) == before
+
+
+@pytest.mark.parametrize(
+    "stamp,enabled",
+    [("2026-10-29T02:59:59+00:00", True), ("2026-10-29T03:00:00+00:00", False)],
+)
+def test_local_calendar_cutoff_uses_explicit_timezone(stamp, enabled):
+    chosen = closet_weather.overlay_for_date(
+        "badge",
+        "0001-01-01",
+        "2026-10-28",
+        timezone="America/Sao_Paulo",
+        now=datetime.fromisoformat(stamp),
+    )
+    assert chosen == ("badge" if enabled else None)
+
+
+@pytest.mark.parametrize("zone,now", [("Invalid/Zone", datetime.now(UTC)), ("UTC", datetime(2026, 10, 22))])
+def test_date_policy_rejects_unknown_zone_and_naive_time(zone, now):
+    with pytest.raises(ValueError, match="timezone|Timezone"):
+        closet_weather.overlay_for_date("badge", "2026-10-01", "2026-10-28", timezone=zone, now=now)
+
+
+def test_enabled_overlay_changes_both_gateway_images_and_expiration_restores_them(saved):
+    home, closet = saved
+    overlay = home.parent / "badge.png"
+    Image.new("RGBA", (64, 64), (255, 0, 160, 160)).save(overlay)
+    args = (closet.root, "looks", "BR", 22)
+    plain = closet_weather.publish_closet_look(*args, gateways=["hermes", "whatsapp"])
+    marked = closet_weather.publish_closet_look(*args, overlay=overlay, gateways=["hermes", "whatsapp"])
+    assert marked["jpg_sha256"] != plain["jpg_sha256"]
+    assert marked["channels"]["hermes"]["atlas_sha256"] != plain["channels"]["hermes"]["atlas_sha256"]
+    expired = closet_weather.overlay_for_date(
+        overlay,
+        "0001-01-01",
+        "2026-10-28",
+        timezone="America/Sao_Paulo",
+        now=datetime.fromisoformat("2026-10-29T03:00:00+00:00"),
+    )
+    assert (
+        closet_weather.publish_closet_look(*args, overlay=expired, gateways=["hermes", "whatsapp"]) == plain
+    )
+
+
+def test_cli_accepts_explicit_overlay_timezone(saved):
+    home, closet = saved
+    overlay = home.parent / "badge.png"
+    Image.new("RGBA", (64, 64), "red").save(overlay)
+    code, out, err = invoke(
+        "publish-closet",
+        "--closet-root",
+        closet.root,
+        "--wardrobe",
+        "looks",
+        "--country",
+        "BR",
+        "--temperature",
+        22,
+        "--gateway",
+        "hermes",
+        "--overlay",
+        overlay,
+        "--overlay-start-date",
+        "0001-01-01",
+        "--overlay-end-date",
+        "9999-12-31",
+        "--overlay-timezone",
+        "America/Sao_Paulo",
+    )
+    assert code == 0, err
+    assert json.loads(out)["overlay"] is True

@@ -1,105 +1,107 @@
 # Local runtime parity and review boundary
 
-The project represents the supplied local production behavior in portable modules and adapters.
-A local installation mirror has **not been created or verified** in this coding run. Live runtime
-parity is **not verified**: the live Hermes executable/runtime, production weather state and external
-bridge are unavailable here. Tests use isolated fixtures and injected runners/store functions. A
-read-only audit also verified all four existing local collections and ran guarded dry-runs against
-temporary copies of a saved legacy collection and the current transparent collection. Their real
-source/inventory hashes and mtimes remained unchanged. Fresh isolated state fixtures were used;
-no weather request was made. Candidate contact sheets from both copies were visually inspected,
-with all previews and evidence kept outside this repository.
-The parent must review the code, run the full checks in an environment allowing loopback sockets,
-and compare the reviewed source with a separate code-only local copy before replacing anything.
+The supplied review snapshot has been audited as input data. The file-by-file
+[coverage ledger](local-copy-coverage.md) maps its package sources, tests, documentation,
+three separate runtime modules, artwork preparation and external bridge components to
+maintained behavior or a precise external boundary. Matching file hashes cannot establish
+behavioral parity. No local installation mirror or live runtime parity is verified here.
+Historical local run/visual-review claims in the snapshot are not evidence of this checkout.
 
-## Behavior map
+Tests use synthetic assets, injected weather openers, fake Hermes runners/stores, and an
+in-process fake profile bridge. Existing ephemeral loopback HTTP tests remain intact; a
+sandbox socket restriction is a verification blocker, never grounds to skip/weaken them.
+No private saved collection, active pet, live bridge, account, profile config, service or
+production file is changed. No schedule is installed or activated.
 
-| Supplied local runtime | Project implementation | Evidence and limits |
-|---|---|---|
-| `legacy/runtime/updater.py`: read fresh Open-Meteo state and choose the weather pet | `application.closet_weather.read_weather_state`, `select_closet_look`; `infrastructure.policies` | `StateFileTests` and `SelectionTests` in `tests/test_closet_weather_publish.py`: `updated_at_utc` takes precedence, three-hour freshness, future/invalid refusal, country boundaries and exact saved PNG hash. `publish-closet` makes no weather request. The existing upstream updater remains responsible for fetching state. |
-| `legacy/runtime/sync_avatar.py`: idempotent own-profile update with remote readback | `wardrobe.profile_photo.compose_profile_jpeg`, `channels.live.HermesWhatsAppProfileAdapter`, `application.publish_outfit` | `tests/test_live_whatsapp.py`, `tests/test_cli_publish.py`, `CliTests` in `tests/test_closet_weather_publish.py`: GET before POST, skip matching photo, require target=self and matching readback. Local HTTP tests require permitted loopback sockets; they are not weakened/skipped for this sandbox. |
-| `legacy/runtime/badge_policy.py`: date-limited overlay | `application.closet_weather.overlay_for_date`, `wardrobe.profile_photo` | `tests/test_overlay_policy.py`: optional inclusive UTC date bounds, before/start/end/after tests, expiration restores the plain photo; existing composition tests cover clipping. Supply private badge artwork and the intended dates explicitly. No personal badge or dates are embedded. Applies to the WhatsApp JPEG; PetDex uses the chosen item itself. |
-| `legacy/assets/asset_builder.py`: animated 8×9 atlas and registration | `wardrobe.petdex.build_atlas`, `validate_atlas`; `channels.hermes_pet.HermesPetAdapter` | `tests/test_petdex.py`, `tests/test_hermes_pet.py`, `tests/test_collections.py`: Pillow only, 192×208 cells, six distinct phases, unused columns transparent, alpha/bounds/round-trip checks, runtime `CODEX_STATE_ROWS` agreement, digest-qualified slug, no overwrite, CLI selection/readback and rollback. Whole-mascot motions are portable replacements, not byte-identical legacy animation. |
-| Saved local collections, including older template sets | `Closet.open(root, renderer_check=False)` plus `wardrobe_entries(..., renderer_check=False)` only in read-only publisher/selection paths | Legacy tests for template sets 2/3/4 retain hashes, protected pixels, stale-item checks, inventory, active wardrobe and mtimes. Default opens and rendering still require renderer compatibility. No migration occurs. |
-| Collection selection, then one or both gateways | `application.collections`, `interfaces.cli` | Stable selector IDs; publisher selection is separate from active wardrobe. Removal requires `--yes`, refuses the active wardrobe and retains items/catalog/inventory. Repeated `--gateway hermes --gateway whatsapp` and either single gateway are supported. |
+## Policy and behavior map
 
-Hermes means the **active Hermes PetDex pet/avatar**. The old `hermes-cli` file export elsewhere
-in the generic export command is a separate capability. This publisher never uses it.
-An existing pet label does not establish which character its atlas depicts. Keep active-pet
-identity and private runtime state outside this repository; preserve all existing pet files.
+| Local source | Maintained behavior and evidence |
+|---|---|
+| `legacy/runtime/updater.py` and `local-runtime/updater.py` | `infrastructure/legacy_weather.py` preserves the four legacy bands `<15`, `<22`, `<28`, otherwise hot, with Celsius -30..60, age 0..3h inclusive, no future allowance, and timezone/offset validation. `tests/test_legacy_weather.py`. The old fetch/retry/lock/state-writing service stays external; no fixed location or account slug is copied. |
+| New collection weather policy | `application.closet_weather.select_closet_look` uses the selected saved wardrobe and the country profile's six categories; it does not use legacy bands. `read_weather_state` consumes numeric `temperature_c` and `updated_at_utc` (fallback `current_time_utc`), refusing stale/unsafe data. Publisher freshness is 3h with a 15-minute future tolerance. `tests/test_closet_weather_publish.py`, `tests/test_collections.py`. No new weather request or implicit location. |
+| `legacy/runtime/badge_policy.py` and `local-runtime/badge_policy.py` | Generic `overlay_for_date` converts an aware instant into the explicitly supplied IANA zone before inclusive date comparison. `--overlay-timezone` defaults to UTC for compatibility; the local translation explicitly uses `America/Sao_Paulo`, start `0001-01-01`, end `2026-10-28`. Enabled at `2026-10-29T02:59:59Z`, disabled at `2026-10-29T03:00:00Z`. `tests/test_overlay_policy.py` tests both instants. Policy dates are caller configuration, never package defaults. |
+| Badge output | Caller-supplied overlay is applied through shared portrait composition to both the WhatsApp JPEG and the PetDex atlas. Expiry restores both plain outputs; no overlay means none. No personal badge/vector/font/art ships. Unlike the local bulk copier, publishing does not modify all installed skins or expire them if fresh weather is unavailable. |
+| `legacy/runtime/sync_avatar.py` and `local-runtime/sync_avatar.py` | `HermesWhatsAppProfileAdapter`: own-account GET/readback first; original observed photo backed up once before first POST; POST only on mismatch; up to three readback polls; atomic last-good `avatar-sync.json` only after verification; failure preserves previous bytes. A nonblocking lock serializes catalog staging and sync. `tests/test_avatar_safety.py`, `tests/test_live_whatsapp.py`. |
+| `legacy/assets/asset_builder.py` | `wardrobe.petdex.build_atlas` and `validate_atlas`: 8×9 sheet, 192×208 cells, six distinct useful phases, two transparent columns, correct `CODEX_STATE_ROWS`, margins/alpha/round-trip checks. `tests/test_petdex.py`. Generic whole-mascot motions replace character-specific vector/CairoSVG animation; no exact visual/byte parity claimed. |
+| Collections and gateways | `application.collections`, `interfaces.cli`: stable IDs, `collections list/select/remove`, repeated `--gateway hermes --gateway whatsapp`, separate persisted selection; never change `Closet.active` when publishing/selecting. `tests/test_collections.py`. Saved legacy template sets retain hash/stale/protected-pixel checks without renderer migration. |
 
-## Hermes apply boundary
+## Apply safety and partial outcomes
 
-Dry-run builds and hashes the candidate in memory: no directories, temporary files, live store
-imports, Hermes CLI calls, bridge calls, or configuration changes. Generated previews used during
-review belong outside the repository. Opaque flat light backgrounds are removed only from a
-separate in-memory image by edge-connected flood fill. Enclosed white details remain. Ambiguous
-backgrounds stop publishing; saved collection PNGs are never modified. Geometry tests do not
-replace visual inspection of real candidate artwork before later live apply.
+Hermes means the **active Hermes PetDex pet/avatar**, separate from the `hermes-cli` file
+export. Dry-run composes/hashes in memory with no filesystem writes, staging, live Hermes
+imports, CLI calls or network requests. Only `--apply` can change a selected profile.
 
-For apply, run the package inside the Hermes Agent Python environment with its `hermes` command
-on PATH. The adapter resolves the current profile with `hermes config path`, pins subsequent CLI
-calls to that profile using `HERMES_HOME`, and scopes store registration to the same home. Older
-Hermes releases without a context override require `HERMES_HOME` already pinned to that home.
-It validates the installed row taxonomy and a restorable previous slug before any write. Both
-selected gateways' local configuration is preflighted before delivery.
+Hermes apply requires the Hermes Agent Python environment and CLI. `HermesPetAdapter`
+resolves the active profile via `hermes config path`, pins CLI/store calls to it, validates
+runtime `CODEX_STATE_ROWS`, and requires a restorable previous slug. New sheets use a full
+digest-qualified slug and exclusive directory reservation; occupied differing sheets are
+refused. It verifies registration bytes, selection and readback. Selection failure restores
+and verifies the previous slug. Existing pet files are preserved. These are tested interfaces;
+the installed runtime, TUI repaint and candidate personal artwork still require later review.
 
-`register_local_pet` can overwrite, so the publisher uses `closet-pet-<full atlas SHA256>`, accepts
-an occupied slug only if its existing sheet bytes exactly match, and exclusively reserves a new
-slug directory before registration. It passes validated PNG bytes (the Hermes bytes API preserves
-them, even if the store names the file `spritesheet.webp`); Pillow decodes by signature. It verifies
-stored bytes before selecting with `hermes pets select SLUG`, then reads
-`hermes config get display.pet.slug`. A selection/readback failure triggers CLI rollback to the
-previous slug and another readback. Rollback failure is reported explicitly. Registered candidate
-files remain available for inspection after a failure; existing pets are never deleted. This
-reservation protects cooperating publishers, not arbitrary concurrent external store writers.
+For combined Hermes + WhatsApp apply, Hermes preflight and WhatsApp catalog/state/bridge
+GET readback complete before either profile changes. The bridge needs the candidate JPEG
+in its approved catalog to compare, so apply may stage that JPEG and create lock/state
+directories during preflight; preflight failure can leave these reviewable files. No profile
+has changed at that point. The built-in WhatsApp lock remains held across both deliveries.
+Sync reads the own photo again before POST. Its state defaults to `<approved-catalog>/.avatar-sync`
+in the CLI; Python callers must supply a private state directory. Keep one state/backup per
+connected account and reuse it for subsequent runs. Do not repoint it to a different account.
 
-The runtime contract was checked against upstream
-[geometry/taxonomy](https://github.com/NousResearch/hermes-agent/blob/main/agent/pet/constants.py),
-[store](https://github.com/NousResearch/hermes-agent/blob/main/agent/pet/store.py), and
-[profile/home resolver](https://github.com/NousResearch/hermes-agent/blob/main/hermes_constants.py).
-The installed local runtime still needs review before live use.
+Each delivery failure is reported per gateway. Hermes failure does not hide a successful
+WhatsApp delivery. WhatsApp failure after Hermes success triggers Hermes rollback where the
+adapter supports it, reporting `rolled-back` or `rollback-failed`; a rollback error cannot be
+reported as success. `tests/test_combined_apply.py` and `tests/test_hermes_pet.py` cover this.
+The bridge's slug-only POST interface cannot restore arbitrary backup bytes; a failed upload
+or unverified readback may have changed the remote photo. Last-good state remains unchanged,
+with the original backup retained for separately reviewed restoration. Multi-target apply is
+not an atomic remote transaction.
 
-## Code versus private/generated data
+## External bridge and legacy service boundary
 
-Copy reviewed package code, documentation, public examples, dependency/build configuration and
-tests. Keep local collection PNGs/archives, generated atlases/JPEGs/contact sheets, catalogs,
-inventory, audit snapshots, sandbox outputs, weather state, badge artwork, Hermes config/pets,
-Baileys sessions, user/account data and credentials outside both the repository and package.
-The local Baileys bridge is an **external Hermes Agent runtime dependency**; its large source,
-installation, sessions and credentials are not vendored here. The bridge URL and header remain
-caller configuration. No personal absolute paths or coordinates are required by the package.
+The Hermes/Baileys bridge stays external, including bot routes, allowlist, owner-message gate,
+authentication, sessions and dependencies. The package uses exactly GET
+`/profile-picture?slug=...` and POST `/profile-picture` with JSON `{slug}`, plus a configured
+header. It accepts only `target=self`; callers cannot select another recipient. Requests have
+no browser Origin and no redirects/proxies. Header values and remote error bodies never enter
+logs or reported errors. No credentials or account identifiers are stored in publisher selection.
 
-The portable comparison script reads two existing roots without copying, installing, or changing
-anything. It compares relative file paths and SHA256 hashes, reporting only missing/extra/changed
-paths. Exit 0 means identical manifests, 1 means differences, 2 means invalid roots/unsafe paths.
-It rejects included symlinks and does not follow them.
+The bridge performs actual CDN readback and perceptual comparison to tolerate WhatsApp
+recompression. The package validates the returned target, boolean match and remote bytes/hash;
+it trusts the configured bridge's comparator. POST acknowledgement alone is **not verified**.
+Fake-bridge tests do not verify Baileys, CDN comparison thresholds, account changes or live parity.
+A missing observed photo without an existing backup fails closed before first POST.
+
+The old updater's fixed launcher/profile, three weather request attempts, updater lock, weather
+state writing, badge bulk installation, history/gallery and service chaining stay external.
+The legacy chain can expire badges and sync a previous pet even if fetching weather fails;
+`publish-closet` instead requires fresh valid weather before delivering. It does not provide that
+failure fallback or mutate all installed pets. No personal paths, coordinates, labels or art are
+copied. See every source/test mapping in [local-copy-coverage.md](local-copy-coverage.md).
+
+The `existing hourly timer` described by historical input is untouched. Current location and
+cadence remain unresolved. Any future integration must explicitly **replace or disable the old
+avatar post-hook**, otherwise it may overwrite the new WhatsApp photo. The uninstalled
+[service example](../examples/closet-weather/mascot-wardrobe-closet-weather.service.example)
+shows `ExecStartPost=` reset semantics and a dry-run command. Retaining the old updater as a
+state producer also retains its active-pet effects unless separately changed/reviewed. Activation,
+profile changes and schedule choices need separate user approval; this change does none of them.
+
+## Code mirror comparison and private data
+
+`scripts/check_local_parity.py` is an optional read-only code mirror comparison:
 
 ```sh
 python scripts/check_local_parity.py --source /path/to/reviewed/project --copy /path/to/local/code-mirror
 ```
 
-Its explicit exclusions are defined in the script: root `.git`, `.venv`, `.agents`, `.codex`,
-`.aws`, `.claude`, `build`, `dist`, `audit`, `sandbox`, `state`, `logs`, `output`,
-`mascot-wardrobe-out`, `data`, `collections`, `closets`, `inventory`, `catalog`, `catalogs`,
-`pets`, `exports`, `archives`, `snapshots`, `sessions`, `credentials`, `auth`, `node_modules`;
-cache directories `__pycache__`, `.pytest_cache`, `.ruff_cache`, `node_modules` anywhere;
-files `.env`, `.env.*` except `.env.example` anywhere; root private files `config.yaml`,
-`auth.json`, `weather-publisher.json`; suffixes `.pyc`, `.pyo`, `.log`, `.egg-info`. Public images in
-`assets`/`examples` are compared. There is no blanket PNG/archive exclusion. This checks code
-mirror equality under those exclusions, not live configuration, external bridge code or semantics.
+It reports relative missing/extra/changed file paths only, rejecting included symlinks. Exit 0
+means equal included manifests, 1 means differences, 2 means invalid inputs. Exclusions are
+explicit in the script: private root runtime/data/configuration directories, caches, environment
+files and generated bytecode/log/egg-info suffixes. Public code/docs/config examples/images are
+included. It establishes code equality under those exclusions, not behavior or live integration.
 
-## Existing hourly schedule
-
-`existing hourly timer` and its service/runtime are untouched. No unit is installed or activated.
-The existing service remains responsible for badge policy, old updater and avatar sync. The
-[service example](../examples/closet-weather/mascot-wardrobe-closet-weather.service.example) is
-uninstalled and defaults to dry-run. A safe manual review invocation is:
-
-```sh
-mascot-wardrobe publish-closet --country BR --state-file /path/to/fresh/state.json
-```
-
-Use an existing fresh state file; do not geocode or fetch weather again. A future schedule or live
-apply requires separate review after local code parity, candidate visual inspection and bridge
-compatibility have been verified. This change claims no timer hookup or active live integration.
+The review snapshot is ignored under `build/` and pruned from distributions. Generated assets,
+audit records, local images/archives, runtime state, credentials, Baileys sessions, personal
+collections and installed Hermes config/pets are input data or external components, never public
+package code. The coverage ledger accounts for them without importing them.

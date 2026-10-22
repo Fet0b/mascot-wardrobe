@@ -505,7 +505,9 @@ def _whatsapp_target(args):
             "whatsapp needs --whatsapp-catalog-dir, --whatsapp-bridge-url and --whatsapp-bridge-header"
         )
     adapter = HermesWhatsAppProfileAdapter(
-        args.whatsapp_bridge_url, bridge_header=args.whatsapp_bridge_header
+        args.whatsapp_bridge_url,
+        bridge_header=args.whatsapp_bridge_header,
+        state_dir=args.whatsapp_catalog_dir / ".avatar-sync",
     )
     return WhatsAppTarget(args.whatsapp_catalog_dir, adapter)
 
@@ -541,10 +543,15 @@ def _publish_closet_parser(commands):
         "--overlay", type=Path, help="Optional square RGBA PNG you supply; clipped to the circular-safe area"
     )
     command.add_argument(
-        "--overlay-start-date", help="Inclusive UTC date, YYYY-MM-DD; requires overlay and end date"
+        "--overlay-start-date",
+        help="Inclusive local calendar date, YYYY-MM-DD; requires overlay and end date",
     )
     command.add_argument(
-        "--overlay-end-date", help="Inclusive UTC date, YYYY-MM-DD; requires overlay and start date"
+        "--overlay-end-date",
+        help="Inclusive local calendar date, YYYY-MM-DD; requires overlay and start date",
+    )
+    command.add_argument(
+        "--overlay-timezone", default="UTC", help="IANA timezone for overlay dates (default: UTC)"
     )
     command.add_argument(
         "--apply",
@@ -602,7 +609,9 @@ def _publish_closet(args):
         weather=weather,
         profiles=args.profiles,
         background=args.background,
-        overlay=overlay_for_date(args.overlay, args.overlay_start_date, args.overlay_end_date),
+        overlay=overlay_for_date(
+            args.overlay, args.overlay_start_date, args.overlay_end_date, timezone=args.overlay_timezone
+        ),
         apply=args.apply,
         whatsapp=_whatsapp_target(args) if gateways is None or "whatsapp" in gateways else None,
         gateways=gateways,

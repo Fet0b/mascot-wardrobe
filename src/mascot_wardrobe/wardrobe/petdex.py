@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from mascot_wardrobe.wardrobe.profile_photo import _decode_png
+from mascot_wardrobe.wardrobe.profile_photo import _decode_png, compose_profile_image
 
 FRAME_W, FRAME_H = 192, 208
 COLUMNS, FRAMES = 8, 6
@@ -158,8 +158,10 @@ def validate_atlas(png, *, rows=CODEX_STATE_ROWS):
             raise ValueError("Hermes atlas PNG round-trip failed")
 
 
-def build_atlas(png):
+def build_atlas(png, *, overlay=None):
     item, removed = prepare_source(png)
+    if overlay is not None:
+        item = compose_profile_image(_png(item), overlay=overlay)
     item = item.crop(item.getchannel("A").getbbox())
     item.thumbnail((140, 150), Image.Resampling.LANCZOS)
     sheet = Image.new("RGBA", (COLUMNS * FRAME_W, len(CODEX_STATE_ROWS) * FRAME_H))

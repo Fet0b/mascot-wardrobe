@@ -12,7 +12,7 @@ workflow (`generate` / `select` / `publish`) stays available and unchanged.
 2. **Read the temperature.** Either `--temperature` (explicit, Celsius or `--unit F`) or
    `--state-file`: the JSON your existing weather updater already writes.
 3. **Classify.** The country profile (`profiles.json`, or `--profiles`) maps the temperature to
-   one of six categories. No threshold lives anywhere else.
+   one of six categories. These six-category thresholds are independent of the portable legacy four-band policy.
 4. **Select.** The wardrobe item whose `template` is that category. Exactly one per category is
    required; otherwise the command fails closed.
 5. **Plan or apply.** `publish-closet` renders the saved item as a profile JPEG and prints the
@@ -120,9 +120,12 @@ visual review, private-data boundaries and limitations.
 
 The saved selection contains no credentials. Selected WhatsApp can be planned without settings;
 applying it requires the complete existing WhatsApp configuration. Hermes-only apply requires no
-WhatsApp settings. All local configuration preflight precedes writes. Each selected gateway is
-attempted after preflight; a delivery failure is reported per gateway and exits 1, so partial
-delivery is possible.
+WhatsApp settings. Both selected targets are preflighted before profile changes, including bridge GET readback.
+Apply may stage the candidate in the catalog for that comparison. The WhatsApp lock spans staging
+and both deliveries. Each gateway outcome is reported; Hermes failure does not hide WhatsApp
+success. WhatsApp failure after Hermes success rolls back the Hermes selection if supported,
+reporting rollback failure explicitly. Partial remote delivery remains possible; see
+[local-runtime-parity.md](local-runtime-parity.md) for limits and last-good state handling.
 
 Missing, malformed, stale or unsafe selections and missing/stale weather state fail with exit 2
 before any gateway writes. No active wardrobe is used as a fallback. The explicit manual
@@ -131,10 +134,12 @@ before any gateway writes. No active wardrobe is used as a fallback. The explici
 supplying just one fails. Repeated `--gateway hermes --gateway whatsapp` overrides gateways for
 that run; either single flag works too. All publishing remains dry-run unless `--apply` is present.
 
-Optional badge artwork can be restricted to inclusive UTC dates with
-`--overlay /path/to/badge.png --overlay-start-date 2026-10-21 --overlay-end-date 2026-10-22`.
-Dates here are illustrative; supply your own policy. Outside the window the plain JPEG is used.
-The PetDex atlas always uses the exact selected item, without the profile overlay.
+Optional artwork can be restricted to inclusive local calendar dates using an explicit IANA zone:
+`--overlay /path/to/badge.png --overlay-start-date 0001-01-01 --overlay-end-date 2026-10-28
+--overlay-timezone America/Sao_Paulo`. This translates the reviewed local deadline; dates and zone
+remain caller configuration. The timezone defaults to UTC for older callers, so supply the intended
+zone explicitly. The same enabled overlay reaches both the WhatsApp portrait and PetDex atlas;
+expiry restores both plain outputs. No overlay is shipped or added when none is supplied.
 
 ## Data model
 
@@ -151,7 +156,11 @@ The PetDex atlas always uses the exact selected item, without the profile overla
 
 In scope: selecting from a saved wardrobe by weather, a deterministic profile JPEG, dry-run by
 default, collection management, a separate gateway selection, active local Hermes PetDex selection, and an
-opt-in WhatsApp own-profile update with the existing readback and idempotence.
+opt-in WhatsApp own-profile update with GET first, one original-photo backup before first POST,
+three readback polls, locking and atomic last-good state. CLI sync state lives under
+`<approved-catalog>/.avatar-sync`; reuse it for the same connected account. Python adapters require
+an explicit state directory. Failed verification leaves last-good bytes unchanged; the remote
+photo may still have changed. The bridge cannot restore arbitrary backup bytes by slug.
 
 Out of scope, by design: any weather API request or coordinates in `publish-closet`; Telegram;
 switching the active wardrobe; any closet or inventory write while publishing; creating or installing a timer or
@@ -160,9 +169,12 @@ service; shipping personal artwork or badge art (an overlay is always supplied b
 ## Scheduler hookup is opt-in
 
 This repository never installs or enables a scheduler. When you decide to automate, **reuse the
-hourly job you already run** for the weather updater after separate parity review. The
+job you already run** for the weather updater after separate parity review. Current cadence and
+location remain unresolved; no hourly schedule is assumed by the package. The
 `examples/closet-weather/` service command is a dry-run; no existing unit is changed here.
-Do not add a second timer for the same purpose; the state file is the hand-off, so one cadence serves both. Until you wire it yourself, nothing runs.
+Before enabling delivery, replace/disable the old `sync_avatar.py` post-hook so it cannot overwrite
+the new photo. The service example shows the `ExecStartPost=` reset needed for a reviewed drop-in.
+Do not add a competing timer. Activation requires separate user approval; nothing is installed here.
 Remove `--apply` to return to a dry-run.
 
 ## Backward compatibility

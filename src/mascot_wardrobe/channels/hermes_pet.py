@@ -173,3 +173,11 @@ class HermesPetAdapter:
                 raise RuntimeError(f"Hermes selection failed; rollback failed: {rollback}") from error
             raise RuntimeError("Hermes selection failed; previous slug restored and verified") from error
         return {"action": "selected", "slug": plan.slug, "previous_slug": prepared.previous, "verified": True}
+
+    def rollback(self, prepared):
+        """Restore and verify the selection saved during preflight; preserve all pet files."""
+        self._sheet(prepared.home, prepared.previous)
+        self._command("pets", "select", prepared.previous, environment=prepared.environment)
+        if self._selected(prepared.environment) != prepared.previous:
+            raise RuntimeError("Hermes rollback readback mismatch")
+        return {"verified": True, "slug": prepared.previous}

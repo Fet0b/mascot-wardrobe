@@ -87,3 +87,17 @@ records its boundaries.
 | Alpha-only paired feet; absence/ambiguity, scaling, translation; strict interior and edit-mask clipping | `tests/test_feet.py` |
 | Exact outside-box shoe exception; renderer tampering still refused | `tests/test_feet.py::test_generate_accepts_exact_sneakers_but_rejects_extra_outside_box_pixels` |
 | Atomic 2/3 → 4 migration; styles, provenance, byte-equal backups, rollback, tamper guards | `tests/test_closet.py::ClosetMigrateTests::test_preserves_identity_and_adds_styles_and_provenance`<br>`tests/test_closet.py::RevisionThreeMigrateTests::test_preserves_identity_and_adds_styles_and_provenance`<br>`tests/test_inventory_import.py::test_real_closet_migration_repins_only_matching_inventory_hash` |
+
+
+## Local-copy safety and explicit runtime boundaries
+
+See [local-copy-coverage.md](local-copy-coverage.md) for every reviewed source, test and document,
+and [local-runtime-parity.md](local-runtime-parity.md) for the external bridge/service limits.
+
+| Contract | Maintained evidence |
+|---|---|
+| Inclusive São Paulo cutoff, shared optional overlay, no bundled badge | `tests/test_overlay_policy.py::test_local_calendar_cutoff_uses_explicit_timezone`<br>`tests/test_overlay_policy.py::test_enabled_overlay_changes_both_gateway_images_and_expiration_restores_them` |
+| Separate legacy four bands, Celsius/freshness and no invented location | `tests/test_legacy_weather.py::test_exact_legacy_boundaries`<br>`tests/test_legacy_weather.py::test_legacy_freshness_is_stricter_than_publisher_future_tolerance`<br>`tests/test_legacy_weather.py::test_new_profile_and_legacy_bands_remain_distinct` |
+| Original observed backup, three readbacks, lock, self only, atomic last-good state | `tests/test_avatar_safety.py::test_backup_is_observed_photo_before_post_and_is_preserved_once`<br>`tests/test_avatar_safety.py::test_three_polls_allow_eventual_consistency`<br>`tests/test_avatar_safety.py::test_failed_readback_and_failed_atomic_replace_preserve_last_good`<br>`tests/test_avatar_safety.py::test_lock_contention_stops_all_requests_and_nonself_never_accesses_files` |
+| Both target preflights precede changes; partial/rollback outcomes explicit | `tests/test_combined_apply.py::test_unreachable_whatsapp_aborts_before_hermes_changes`<br>`tests/test_combined_apply.py::test_both_preflights_precede_profile_changes_and_lock_covers_hermes_delivery`<br>`tests/test_combined_apply.py::test_whatsapp_failure_rolls_back_hermes_and_reports_actual_outcomes`<br>`tests/test_combined_apply.py::test_cross_gateway_rollback_failure_is_explicit` |
+| Legacy behavior ledger and uninstalled post-hook replacement example | `tests/test_local_parity.py::test_coverage_ledger_maps_all_source_families_and_explicit_external_boundaries`<br>`tests/test_local_parity.py::test_review_service_explicitly_resets_old_post_hook_without_installing` |

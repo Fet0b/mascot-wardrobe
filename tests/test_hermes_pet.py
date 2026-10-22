@@ -245,3 +245,22 @@ def test_reused_adapter_resolves_store_for_each_active_profile(runtime, plan, tm
         adapter.apply(plan)
     assert [call.args[0] for call in loader.call_args_list] == [runtime.home, second.home]
     assert second.registered == [plan.slug]
+
+
+def test_explicit_rollback_restores_and_verifies_preflight_selection(runtime, plan):
+    adapter = runtime.adapter()
+    prepared = adapter.preflight(plan)
+    adapter.apply(plan, prepared=prepared)
+    assert runtime.active == plan.slug
+    result = adapter.rollback(prepared)
+    assert result == {"verified": True, "slug": prepared.previous}
+    assert runtime.active == prepared.previous
+
+
+def test_explicit_rollback_failure_is_not_reported_verified(runtime, plan):
+    adapter = runtime.adapter()
+    prepared = adapter.preflight(plan)
+    adapter.apply(plan, prepared=prepared)
+    runtime.fail_rollback = True
+    with pytest.raises(RuntimeError):
+        adapter.rollback(prepared)

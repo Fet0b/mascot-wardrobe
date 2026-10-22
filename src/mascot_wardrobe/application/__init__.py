@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,11 +132,24 @@ class TelegramTarget:
     state_dir: Path
 
 
-def _publish_whatsapp(target, selection):
-    from mascot_wardrobe.channels.live import publish_to_catalog
+@contextmanager
+def prepare_whatsapp_delivery(target, selection, *, preflight=False):
+    """Hold the built-in adapter lock across staging, preflight and delivery."""
+    from mascot_wardrobe.channels.live import HermesWhatsAppProfileAdapter, publish_to_catalog
 
-    publish_to_catalog(selection["slug"], Path(selection["jpg"]), target.catalog_dir)
-    return {"status": "applied", **target.adapter.sync(selection["slug"])}
+    adapter = target.adapter
+    managed = isinstance(adapter, HermesWhatsAppProfileAdapter)
+    with adapter.locked() if managed else nullcontext():
+        publish_to_catalog(selection["slug"], Path(selection["jpg"]), target.catalog_dir)
+        if preflight:
+            adapter.preflight(selection["slug"])
+        sync = adapter._sync if managed else adapter.sync
+        yield lambda: {"status": "applied", **sync(selection["slug"])}
+
+
+def _publish_whatsapp(target, selection):
+    with prepare_whatsapp_delivery(target, selection) as deliver:
+        return deliver()
 
 
 def _read_telegram_state(path):
