@@ -936,3 +936,150 @@ class StreetwearTests(unittest.TestCase):
                 composer.armhole("streetwear", index)[0], composer.armhole("classic", index)[0]
             )
         self.assertIsNone(composer.armhole("streetwear", 0))
+
+
+class ChoiceTests(unittest.TestCase):
+    """``WardrobeAgent.generate`` with a resolved ``StyleChoice``."""
+
+    PALETTE = ("#101014", "#4920A8", "#9B4DFF", "#DDC5FF")
+
+    def fixture(self, root):
+        return AgentTests().fixture(root)
+
+    def choice(self, **overrides):
+        from mascot_wardrobe.wardrobe import StyleChoice
+
+        values = {
+            "style": "streetwear",
+            "palette": self.PALETTE,
+            "style_choice": "user",
+            "palette_choice": "user",
+        }
+        values.update(overrides)
+        return StyleChoice(**values)
+
+    def test_library_default_is_classic_with_the_profile_palette(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            manifest = json.loads(WardrobeAgent().generate(mascot, profile, root / "out").read_text())
+            request = manifest["request"]
+            self.assertEqual(request["style"], "classic")
+            self.assertEqual(request["style_choice"], "default")
+            self.assertEqual(request["palette_choice"], "profile")
+            self.assertEqual(request["palette"], list(profile.palette))
+
+    def test_choice_reaches_the_brief_and_the_request(self):
+        from mascot_wardrobe.wardrobe import LocalComposer, WardrobeAgent
+
+        seen = []
+
+        class Spy(LocalComposer):
+            def render(self, source, brief):
+                seen.append(brief)
+                return super().render(source, brief)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            path = WardrobeAgent(Spy()).generate(
+                mascot, profile, root / "out", choice=self.choice(palette_choice="auto")
+            )
+            manifest = json.loads(path.read_text())
+            request = manifest["request"]
+            self.assertEqual(request["style"], "streetwear")
+            self.assertEqual(request["palette"], list(self.PALETTE))
+            self.assertEqual(request["style_choice"], "user")
+            self.assertEqual(request["palette_choice"], "auto")
+            self.assertEqual(len(seen), 6)
+            for brief in seen:
+                self.assertEqual(brief.style, "streetwear")
+                self.assertEqual(tuple(brief.palette), self.PALETTE)
+            for outfit in manifest["outfits"]:
+                self.assertIn("#101014", outfit["brief"])
+                self.assertNotIn("#2878b5", outfit["brief"])
+                self.assertIn("streetwear", outfit["brief"])
+
+    def test_untrusted_choice_is_rejected_before_anything_is_written(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        bad = (
+            self.choice(style="grunge"),
+            self.choice(palette=("#12",)),
+            self.choice(palette=()),
+            self.choice(palette="#101014"),
+            self.choice(style_choice="whatever"),
+            self.choice(palette_choice=None),
+            self.choice(style=3),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            for choice in bad:
+                with self.assertRaises(ValueError):
+                    WardrobeAgent().generate(mascot, profile, root / "out", choice=choice)
+                self.assertFalse((root / "out").exists())
+
+    def test_repeat_runs_are_identical_and_other_values_are_refused(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            out = root / "out"
+            agent = WardrobeAgent()
+            path = agent.generate(mascot, profile, out, choice=self.choice())
+            first = path.read_bytes()
+            self.assertEqual(agent.generate(mascot, profile, out, choice=self.choice()), path)
+            self.assertEqual(path.read_bytes(), first)
+            with self.assertRaises(ValueError):
+                agent.generate(mascot, profile, out, choice=self.choice(style="classic"))
+            with self.assertRaises(ValueError):
+                agent.generate(mascot, profile, out, choice=self.choice(palette=("#101014", "#ffffff")))
+            with self.assertRaises(ValueError):
+                agent.generate(mascot, profile, out)
+            self.assertEqual(path.read_bytes(), first)
+
+    def test_provenance_only_change_rewrites_only_the_manifest(self):
+        from mascot_wardrobe.wardrobe import LocalComposer, WardrobeAgent
+
+        calls = []
+
+        class Counting(LocalComposer):
+            def render(self, source, brief):
+                calls.append(brief.category)
+                return super().render(source, brief)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            out = root / "out"
+            agent = WardrobeAgent(Counting())
+            path = agent.generate(mascot, profile, out, choice=self.choice())
+            assets = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir() if p != path}
+            self.assertEqual(len(assets), 18)
+            again = agent.generate(
+                mascot, profile, out, choice=self.choice(style_choice="auto", palette_choice="auto")
+            )
+            self.assertEqual(again, path)
+            request = json.loads(path.read_text())["request"]
+            self.assertEqual((request["style_choice"], request["palette_choice"]), ("auto", "auto"))
+            self.assertEqual(len(calls), 6)
+            after = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir() if p != path}
+            self.assertEqual(after, assets)
+
+    def test_provenance_update_needs_verified_assets(self):
+        from mascot_wardrobe.wardrobe import WardrobeAgent
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mascot, profile = self.fixture(root)
+            out = root / "out"
+            path = WardrobeAgent().generate(mascot, profile, out, choice=self.choice())
+            before = path.read_bytes()
+            (out / json.loads(before)["outfits"][0]["png"]).write_bytes(b"corrupted")
+            with self.assertRaises(ValueError):
+                WardrobeAgent().generate(mascot, profile, out, choice=self.choice(style_choice="auto"))
+            self.assertEqual(path.read_bytes(), before)

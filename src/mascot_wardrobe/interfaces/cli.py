@@ -15,13 +15,20 @@ from mascot_wardrobe.application import (
     select_outfit,
     sync_sandbox,
 )
-from mascot_wardrobe.wardrobe import CATEGORIES
+from mascot_wardrobe.interfaces.prompts import ask_palette, ask_style, is_interactive
+from mascot_wardrobe.wardrobe import AUTO, CATEGORIES, STYLES
+from mascot_wardrobe.wardrobe.styles import validate_palette
 
 DEFAULT_OUT = Path("mascot-wardrobe-out")
 
 
 def parser():
     root = argparse.ArgumentParser(description="Isolated mascot wardrobe; no production channels")
+    root.add_argument(
+        "--no-input",
+        action="store_true",
+        help="Never prompt, even on a terminal: style and palette must then be passed explicitly",
+    )
     commands = root.add_subparsers(dest="command", required=True)
     generate = commands.add_parser("generate", help="Prepare six local outfits from your PNG")
     generate.add_argument("--mascot", required=True, type=Path)
@@ -34,6 +41,7 @@ def parser():
         "--body-box", nargs=4, type=float, default=(0.22, 0.60, 0.78, 0.88), metavar=("X1", "Y1", "X2", "Y2")
     )
     generate.add_argument("--output", type=Path, default=DEFAULT_OUT / "catalog")
+    _choice_arguments(generate)
     select = commands.add_parser("select", help="Select a prepared outfit, without generation")
     _selection_arguments(select)
     for name in ("sandbox", "demo"):
@@ -74,6 +82,57 @@ def parser():
     publish.add_argument("--telegram-state-dir", type=Path, default=DEFAULT_OUT / "state")
     _closet_parser(commands)
     return root
+
+
+def _choice_arguments(command):
+    command.add_argument(
+        "--style",
+        choices=(*STYLES, AUTO),
+        help=(
+            "Garment style; 'auto' lets the generator choose, deterministically and locally "
+            "(no network, no model). Required when not interactive"
+        ),
+    )
+    command.add_argument(
+        "--palette",
+        nargs="+",
+        metavar="#RRGGBB",
+        help=(
+            "One to six colors: base, secondary, accent and highlight roles (first is the base, "
+            "last the accent); or the single word 'auto' for a deterministic local choice. "
+            "Required when not interactive"
+        ),
+    )
+
+
+def _prompt_io(read):
+    def ask(prompt=""):
+        sys.stderr.write(prompt)
+        sys.stderr.flush()
+        return read("")
+
+    def write(text):
+        print(text, file=sys.stderr)
+
+    return ask, write
+
+
+def _choices(args, interactive, read):
+    """Turn flags or prompt answers into the ``style`` and ``palette`` library arguments."""
+    palette = args.palette
+    if palette is not None:
+        palette = AUTO if palette == [AUTO] else list(validate_palette(palette))
+    style = args.style
+    ask, write = _prompt_io(read)
+    for name, value in (("style", style), ("palette", palette)):
+        if value is None and not interactive:
+            options = "classic, streetwear or auto" if name == "style" else "colors or auto"
+            raise ValueError(f"--{name} is required when not interactive: pass one of {options}")
+    if style is None:
+        style = ask_style(ask, write, allow_keep=False)
+    if palette is None:
+        palette = ask_palette(ask, write, allow_keep=False)
+    return style, palette
 
 
 def _closet_parser(commands):
@@ -252,13 +311,18 @@ def _temperature(args):
     return args.temperature, args.unit, {"source": label}
 
 
-def main(argv=None):
+def main(argv=None, *, interactive=None, read=input):
     args = parser().parse_args(argv)
+    if args.no_input:
+        interactive = False
+    elif interactive is None:
+        interactive = is_interactive(False, sys.stdin, sys.stderr)
     try:
         if args.command == "closet":
             print(json.dumps(_closet(args), ensure_ascii=False, indent=2))
             return 0
         if args.command == "generate":
+            style, palette = _choices(args, interactive, read)
             manifest = prepare_wardrobe(
                 args.mascot,
                 args.mascot_id,
@@ -266,8 +330,16 @@ def main(argv=None):
                 args.output,
                 body_box=args.body_box,
                 profiles=args.profiles,
+                style=style,
+                palette=palette,
             )
-            result = {"manifest": str(manifest), "generator": "local-compositor", "remote_inference": False}
+            request = json.loads(Path(manifest).read_text(encoding="utf-8"))["request"]
+            result = {
+                "manifest": str(manifest),
+                "generator": "local-compositor",
+                "remote_inference": False,
+                **{key: request[key] for key in ("style", "palette", "style_choice", "palette_choice")},
+            }
         else:
             temperature, unit, weather = _temperature(args)
             result = select_outfit(args.manifest, args.country, temperature, unit, profiles=args.profiles)

@@ -8,7 +8,8 @@ from pathlib import Path
 
 from mascot_wardrobe.domain.models import Category, Mascot, to_celsius
 from mascot_wardrobe.infrastructure.policies import load_profile
-from mascot_wardrobe.wardrobe import WardrobeAgent
+from mascot_wardrobe.wardrobe import StyleChoice, WardrobeAgent, _validate_request
+from mascot_wardrobe.wardrobe.styles import resolve_palette, resolve_style
 
 
 def safe_output(path):
@@ -19,10 +20,41 @@ def safe_output(path):
     return raw.resolve()
 
 
-def prepare_wardrobe(image, mascot_id, country, output, *, body_box=(0.22, 0.60, 0.78, 0.88), profiles=None):
-    return WardrobeAgent().generate(
-        Mascot(mascot_id, Path(image), body_box), load_profile(country, profiles), safe_output(output)
-    )
+def prepare_wardrobe(
+    image,
+    mascot_id,
+    country,
+    output,
+    *,
+    body_box=(0.22, 0.60, 0.78, 0.88),
+    profiles=None,
+    style=None,
+    palette=None,
+):
+    """Prepare the six-outfit catalog and return the manifest path.
+
+    ``style`` is a style name or ``"auto"``; ``palette`` a list of hex colors or ``"auto"``.
+    ``None`` keeps the library default (classic, country profile palette). ``auto`` is resolved
+    deterministically from the mascot hash and the country, locally.
+    """
+    mascot = Mascot(mascot_id, Path(image), body_box)
+    profile = load_profile(country, profiles)
+    choice = None
+    if style is not None or palette is not None:
+        source = _validate_request(mascot, profile)  # rejects links and non-PNG before any read
+        seed = hashlib.sha256(source.read_bytes()).hexdigest() + profile.country_code
+        resolved, style_source = resolve_style("classic" if style is None else style, "catalog", seed)
+        if palette is None:
+            colors, palette_source = tuple(profile.palette), "profile"
+        else:
+            colors, palette_source = resolve_palette(palette, resolved, "catalog", seed)
+        choice = StyleChoice(
+            resolved,
+            colors,
+            "default" if style is None else style_source,
+            palette_source,
+        )
+    return WardrobeAgent().generate(mascot, profile, safe_output(output), choice=choice)
 
 
 def export_outfit(selection, output, channel):
